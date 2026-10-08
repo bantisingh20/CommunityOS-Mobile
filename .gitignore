@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# builds / caches
+dist/
+.expo/
+web-build/
+*.tsbuildinfo
+
+# native
+ios/
+android/
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+
+# env (never commit real secrets)
+.env
+.env.local
+.env.*.local
+
+# logs / os
+*.log
+npm-debug.*
+.DS_Store
+
+# Local secrets / environment-specific config (never commit)
+.env
+.env.*
+!.env.example
+appsettings.Development.json
+**/appsettings.Development.json

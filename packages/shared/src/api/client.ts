@@ -1,0 +1,281 @@
+import type { AppConfig } from '../config';
+import type { ApiResult, ErrorCode } from '../models/envelope';
+import type { SecureTokenStore } from '../auth/tokenStore';
+import { ApiRequestError } from './errors';
+
+const CORRELATION_ID_HEADER = 'X-Correlation-Id';
+const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+
+/** HTTP methods the client supports. */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export interface RequestOptions {
+  /** Parsed JSON body for write methods. */
+  body?: unknown;
+  /**
+   * Idempotency key for an at-most-once write (payments/handover etc.). When set, sent as the
+   * `Idempotency-Key` header so a retry replays the original result instead of re-executing.
+   */
+  idempotencyKey?: string;
+  /** Caller-supplied correlation id; one is generated when omitted and always propagated. */
+  correlationId?: string;
+  /** Skip bearer injection (login/forgot/reset are pre-auth). Defaults to false. */
+  anonymous?: boolean;
+  /** Extra headers (never used for auth — the client owns Authorization). */
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+/**
+ * How the client re-authenticates on a 401. An app supplies a refresher that uses the persisted
+ * session token to obtain a fresh access token; returning `null` means "cannot refresh → log out".
+ */
+export type TokenRefresher = (store: SecureTokenStore) => Promise<string | null>;
+
+export interface ApiClientOptions {
+  config: AppConfig;
+  tokenStore: SecureTokenStore;
+  /** Optional 401 recovery. Without it, a 401 clears the session and rethrows UNAUTHENTICATED. */
+  refreshToken?: TokenRefresher;
+  /** Injectable fetch for testability; defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Injectable correlation-id generator; defaults to a UUID-ish string. */
+  generateCorrelationId?: () => string;
+}
+
+/**
+ * Envelope-aware HTTP client (Req 9.1, 9.2, 10.1, 63.3). Every call:
+ *  - prefixes {@link AppConfig.apiBaseUrl} (no hardcoded URL),
+ *  - injects `Authorization: Bearer <accessToken>` from the token store (unless `anonymous`),
+ *  - injects `Idempotency-Key` for idempotent writes,
+ *  - sends and reads back `X-Correlation-Id`, propagating it onto any thrown error,
+ *  - unwraps `{ success, data, error, correlationId }`: returns `data` on success, throws
+ *    {@link ApiRequestError} (with `fieldErrors` mapped and the error `code` surfaced) otherwise,
+ *  - on a 401, runs the single-flight refresh-or-logout flow once, then retries.
+ *
+ * Tokens are never logged.
+ */
+export class ApiClient {
+  private readonly config: AppConfig;
+  private readonly tokenStore: SecureTokenStore;
+  private readonly refreshToken?: TokenRefresher;
+  private readonly fetchImpl: typeof fetch;
+  private readonly newCorrelationId: () => string;
+  /** Single-flight refresh: concurrent 401s share one refresh attempt. */
+  private inFlightRefresh: Promise<string | null> | null = null;
+
+  constructor(options: ApiClientOptions) {
+    this.config = options.config;
+    this.tokenStore = options.tokenStore;
+    this.refreshToken = options.refreshToken;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.newCorrelationId = options.generateCorrelationId ?? defaultCorrelationId;
+  }
+
+  get<T>(path: string, options?: Omit<RequestOptions, 'body'>): Promise<T> {
+    return this.request<T>('GET', path, options);
+  }
+
+  post<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, options);
+  }
+
+  put<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PUT', path, options);
+  }
+
+  patch<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PATCH', path, options);
+  }
+
+  delete<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('DELETE', path, options);
+  }
+
+  /**
+   * Core request. Returns the unwrapped `data`. Throws {@link ApiRequestError} on any failure
+   * envelope or transport/parse error. Retries once after a successful token refresh on 401.
+   */
+  async request<T>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
+    const correlationId = options.correlationId ?? this.newCorrelationId();
+    try {
+      return await this.send<T>(method, path, options, correlationId);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.isUnauthenticated && !options.anonymous) {
+        const refreshed = await this.tryRefresh();
+        if (refreshed) {
+          // Retry once with the new access token.
+          return await this.send<T>(method, path, options, correlationId);
+        }
+        // Only end the session when the token has genuinely expired. A 401 while the token is still
+        // valid is treated as a transient server/network blip (common on flaky links) — we keep the
+        // session so the user isn't bounced back to the login screen again and again. When there is
+        // no refresher and the token IS expired, clear so the app routes to login once.
+        if (this.tokenStore.isAccessTokenExpired()) {
+          await this.tokenStore.clear();
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async send<T>(
+    method: HttpMethod,
+    path: string,
+    options: RequestOptions,
+    correlationId: string,
+  ): Promise<T> {
+    const url = this.buildUrl(path);
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      [CORRELATION_ID_HEADER]: correlationId,
+      ...options.headers,
+    };
+
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (options.idempotencyKey) {
+      headers[IDEMPOTENCY_KEY_HEADER] = options.idempotencyKey;
+    }
+    if (!options.anonymous) {
+      const token = this.tokenStore.getAccessToken();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method,
+        headers,
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        signal: options.signal,
+      });
+    } catch (cause) {
+      // Network/transport failure — surface as an integration failure, keep the correlation id.
+      // Log the underlying cause (dev aid) so an intermittent "can't reach server" is diagnosable
+      // from logcat; the user still sees the friendly INTEGRATION_FAILURE message.
+      // eslint-disable-next-line no-console
+      console.warn(`[API-NET] ${method} ${url} failed corr=${correlationId}: ${String((cause as Error)?.message ?? cause)}`);
+      throw new ApiRequestError({
+        code: 'INTEGRATION_FAILURE',
+        message: 'Network request failed.',
+        correlationId,
+        httpStatus: 0,
+      });
+    }
+
+    return this.parseEnvelope<T>(response, correlationId);
+  }
+
+  private async parseEnvelope<T>(response: Response, fallbackCorrelationId: string): Promise<T> {
+    const headerCorrelationId = response.headers.get(CORRELATION_ID_HEADER) ?? undefined;
+
+    let envelope: ApiResult<T> | null = null;
+    try {
+      envelope = (await response.json()) as ApiResult<T>;
+    } catch {
+      envelope = null;
+    }
+
+    const correlationId = envelope?.correlationId || headerCorrelationId || fallbackCorrelationId;
+
+    if (!envelope) {
+      throw new ApiRequestError({
+        code: httpStatusToCode(response.status),
+        message: `Unexpected non-JSON response (HTTP ${response.status}).`,
+        correlationId,
+        httpStatus: response.status,
+      });
+    }
+
+    if (envelope.success && response.ok) {
+      // `data` is nullable in the envelope; callers of void endpoints type T as the response shape.
+      return envelope.data as T;
+    }
+
+    if (envelope.error) {
+      throw ApiRequestError.fromApiError(envelope.error, correlationId, response.status);
+    }
+
+    throw new ApiRequestError({
+      code: httpStatusToCode(response.status),
+      message: `Request failed (HTTP ${response.status}).`,
+      correlationId,
+      httpStatus: response.status,
+    });
+  }
+
+  /** Single-flight token refresh so N concurrent 401s cause exactly one refresh attempt. */
+  private tryRefresh(): Promise<string | null> {
+    if (!this.refreshToken) {
+      return Promise.resolve(null);
+    }
+    if (!this.inFlightRefresh) {
+      this.inFlightRefresh = this.refreshToken(this.tokenStore).finally(() => {
+        this.inFlightRefresh = null;
+      });
+    }
+    return this.inFlightRefresh;
+  }
+
+  private buildUrl(path: string): string {
+    const base = this.config.apiBaseUrl.replace(/\/+$/, '');
+    const suffix = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${suffix}`;
+  }
+
+  /**
+   * Absolute URL for a path — exposed so the multipart {@link FileClient} (which must build its own
+   * `FormData` request, not a JSON body this client always stringifies) can reuse the single base-url
+   * source instead of hardcoding it.
+   */
+  resolveUrl(path: string): string {
+    return this.buildUrl(path);
+  }
+
+  /** The current bearer access token (or null) — for the multipart {@link FileClient} to authorize. */
+  currentAccessToken(): string | null {
+    return this.tokenStore.getAccessToken();
+  }
+}
+
+function httpStatusToCode(status: number): ErrorCode {
+  switch (status) {
+    case 400:
+      return 'VALIDATION_ERROR';
+    case 401:
+      return 'UNAUTHENTICATED';
+    case 403:
+      return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 409:
+      return 'CONFLICT';
+    case 413:
+      return 'PAYLOAD_TOO_LARGE';
+    case 415:
+      return 'UNSUPPORTED_MEDIA_TYPE';
+    case 429:
+      return 'RATE_LIMITED';
+    case 502:
+      return 'INTEGRATION_FAILURE';
+    default:
+      return 'INTERNAL_ERROR';
+  }
+}
+
+/**
+ * Correlation id generator. Uses `crypto.randomUUID` when available (RN/Hermes expose it via the
+ * runtime polyfill), falling back to a timestamp+random string. ponytail: non-cryptographic
+ * fallback id — fine for request tracing, not for anything security-bearing.
+ */
+function defaultCorrelationId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) {
+    return c.randomUUID();
+  }
+  return `cid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}

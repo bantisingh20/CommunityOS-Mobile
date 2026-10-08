@@ -1,0 +1,246 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { FormScreen } from '../../ui/FormScreen';
+import { FormSection } from '../../ui/FormSection';
+import { AppTextField } from '../../ui/AppTextField';
+import { AppButton } from '../../ui/AppButton';
+import { AsyncBoundary } from '../../ui/AsyncBoundary';
+import { ListRow } from '../../ui/ListRow';
+import { FormBanner } from '../../ui/FormBanner';
+import { Select } from '../../ui/Select';
+import { MasterDataDropdown } from '../../ui/MasterDataDropdown';
+import { DateField } from '../../ui/DateField';
+import { PhotoPicker } from '../../ui/PhotoPicker';
+import { QrCode, shareQrImage } from '../../ui/QrCode';
+import { useAsyncAction } from '../../ui/hooks';
+import { emitToast } from '../../ui/toastBus';
+import { theme } from '../../ui/theme';
+import type { Unit } from '../../models/community';
+import type { CreateVisitPassResult } from '../../models/gate';
+import { GateMasterDataKeys } from '../../models/gate';
+import type { ResourceClients } from '../../resources';
+import { humanizeCode } from '../shared/status';
+import { useMyResident } from './useMyResident';
+
+export interface InviteVisitorScreenProps {
+  resources: ResourceClients;
+  onBack?: () => void;
+}
+
+/** A date `days` from the start of today (local), at local midnight, as an ISO string. */
+function dateFromToday(days: number): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+/** End-of-day (23:59:59 local) for the given ISO date — a valid-until should cover the whole day. */
+function endOfDay(iso: string): string {
+  const d = new Date(iso);
+  d.setHours(23, 59, 59, 0);
+  return d.toISOString();
+}
+
+/** Raise a client-side validation toast (native-app style — no inline error UI). */
+function warn(message: string): void {
+  emitToast({ tone: 'error', title: 'Check the form', message });
+}
+
+/**
+ * Resident pre-invite (Req 23.1). The resident creates a pre-approved visit pass for their own unit
+ * and captures the visitor's details (name, phone, vehicle + type, photo, party size, whom-to-meet)
+ * plus the visit date, the valid-until date and the number of entries. The server returns the QR
+ * token + a one-time OTP shown ONCE. Fields are inline: a {@link Select} host-unit dropdown,
+ * {@link DateField}s backed by the OS-native date picker, numeric inputs and an inline
+ * {@link PhotoPicker} — no in-app modal/dialog form.
+ */
+export function InviteVisitorScreen({ resources, onBack }: InviteVisitorScreenProps) {
+  const me = useMyResident(resources);
+  const [unitId, setUnitId] = useState<string | null>(null);
+  const [visitorName, setVisitorName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [vehicle, setVehicle] = useState('');
+  const [vehicleType, setVehicleType] = useState<string | null>(null);
+  const [persons, setPersons] = useState('1');
+  const [whomToMeet, setWhomToMeet] = useState('');
+  const [photoFileId, setPhotoFileId] = useState<string | null>(null);
+  const [visitDate, setVisitDate] = useState<string | null>(dateFromToday(0));
+  const [validUntil, setValidUntil] = useState<string | null>(dateFromToday(1));
+  const [entries, setEntries] = useState('1');
+  const [created, setCreated] = useState<CreateVisitPassResult | null>(null);
+
+  const units = me.data?.units ?? [];
+  const resident = me.data?.resident ?? null;
+  const selectedUnit = useMemo(() => units.find((u) => u.id === unitId) ?? units[0] ?? null, [units, unitId]);
+  const communityId = selectedUnit?.communityId ?? resident?.communityId ?? '';
+
+  // Default to the sole unit when the resident has exactly one.
+  useEffect(() => {
+    if (!unitId && units.length === 1 && units[0]) {
+      setUnitId(units[0].id);
+    }
+  }, [units, unitId]);
+
+  const create = useAsyncAction(() => {
+    const personsNum = Number(persons.trim() || '1');
+    const entriesNum = Number(entries.trim() || '1');
+    return resources.gate
+      .createVisitPass({
+        hostUnitId: selectedUnit!.id,
+        visitorName: visitorName.trim(),
+        validUntilUtc: endOfDay(validUntil!),
+        maxUses: entriesNum,
+        numberOfPersons: personsNum,
+        ...(visitDate ? { visitDateUtc: visitDate } : {}),
+        ...(phone.trim() ? { phone: phone.trim() } : {}),
+        ...(vehicle.trim() ? { vehicleNumber: vehicle.trim() } : {}),
+        ...(vehicleType ? { vehicleType } : {}),
+        ...(whomToMeet.trim() ? { whomToMeet: whomToMeet.trim() } : {}),
+        ...(photoFileId ? { photoFileId } : {}),
+        ...(resident ? { hostResidentId: resident.id } : {}),
+      })
+      .then((r) => {
+        setCreated(r);
+        return r;
+      });
+  });
+
+  const unitOptions = units.map((u: Unit) => ({ value: u.id, label: `Unit ${u.unitNumber} · ${humanizeCode(u.unitType)}` }));
+
+  const onSubmit = () => {
+    if (!selectedUnit) { warn('Select the unit the visitor is coming to.'); return; }
+    if (!visitorName.trim()) { warn('Enter the visitor\u2019s name.'); return; }
+    if (!validUntil) { warn('Choose the date the pass is valid until.'); return; }
+    if (visitDate && new Date(endOfDay(validUntil)) < new Date(visitDate)) {
+      warn('The valid-until date must be on or after the visit date.');
+      return;
+    }
+    const p = Number(persons.trim() || '1');
+    if (!Number.isInteger(p) || p < 1) { warn('Number of persons must be a whole number of at least 1.'); return; }
+    const e = Number(entries.trim() || '1');
+    if (!Number.isInteger(e) || e < 1) { warn('Entries must be a whole number of at least 1.'); return; }
+    void create.run();
+  };
+
+  if (created) {
+    return (
+      <FormScreen title="Visit pass ready" subtitle="Share with your visitor" {...(onBack ? { onBack } : {})}>
+        <FormBanner message="Show this QR at the gate, or share the token and code with your visitor — the code is shown only once." tone="success" />
+        <FormSection title="Scan at the gate" subtitle="The guard scans this QR to verify the pass" icon="qr-code" tint={theme.color.success}>
+          <View style={styles.qrWrap}>
+            <QrCode value={created.pass.qrToken} size={220} />
+          </View>
+        </FormSection>
+        <FormSection title="Pass details" icon="document-text" tint={theme.color.info}>
+          <ListRow title="Visitor" subtitle={created.pass.visitorName} />
+          {created.pass.whomToMeet ? <ListRow title="To meet" subtitle={created.pass.whomToMeet} /> : null}
+          {created.pass.vehicleType ? <ListRow title="Vehicle" subtitle={`${humanizeCode(created.pass.vehicleType)}${created.pass.vehicleNumber ? ` · ${created.pass.vehicleNumber}` : ''}`} /> : null}
+          <ListRow title="Persons" subtitle={`${created.pass.numberOfPersons ?? 1}`} />
+          <ListRow title="QR token" subtitle={created.pass.qrToken} />
+          <ListRow title="One-time code (OTP)" subtitle={created.otp} />
+          <ListRow title="Entries allowed" subtitle={`${created.pass.maxUses}`} />
+          {created.pass.visitDateUtc ? <ListRow title="Visit date" subtitle={formatDate(created.pass.visitDateUtc)} /> : null}
+          <ListRow title="Valid until" subtitle={formatDateTime(created.pass.validUntilUtc)} />
+        </FormSection>
+        <AppButton title="Share with visitor" onPress={() => sharePass(created)} accessibilityHint="Open the share sheet to send the pass details" />
+        <AppButton
+          title="Create another"
+          variant="secondary"
+          onPress={() => {
+            setCreated(null);
+            setVisitorName('');
+            setPhone('');
+            setVehicle('');
+            setVehicleType(null);
+            setPersons('1');
+            setWhomToMeet('');
+            setPhotoFileId(null);
+            setVisitDate(dateFromToday(0));
+            setValidUntil(dateFromToday(1));
+            setEntries('1');
+            create.reset();
+          }}
+          accessibilityHint="Create another visit pass"
+        />
+      </FormScreen>
+    );
+  }
+
+  return (
+    <FormScreen title="Invite a visitor" subtitle="Create a pre-approved pass" {...(onBack ? { onBack } : {})}>
+      <AsyncBoundary
+        loading={me.loading}
+        error={me.error}
+        empty={!me.loading && units.length === 0}
+        emptyMessage="No unit is linked to your account yet, so a pass can't be created."
+        onRetry={me.reload}
+      >
+        <FormSection title="Visitor" icon="person" tint={theme.color.primary}>
+          <Select label="Host unit" required value={selectedUnit?.id ?? null} options={unitOptions} onChange={setUnitId} placeholder="Select your unit" />
+          <AppTextField label="Visitor name" required value={visitorName} onChangeText={setVisitorName} placeholder="Who are you inviting?" autoCapitalize="words" editable={!create.running} />
+          <AppTextField label="Contact number" value={phone} onChangeText={setPhone} placeholder="Visitor's phone" keyboardType="phone-pad" editable={!create.running} />
+          <AppTextField label="Whom to meet / flat" value={whomToMeet} onChangeText={setWhomToMeet} placeholder="Person or flat they're visiting" autoCapitalize="words" editable={!create.running} />
+          <AppTextField label="Number of persons" value={persons} onChangeText={setPersons} placeholder="1" keyboardType="number-pad" editable={!create.running} />
+        </FormSection>
+
+        <FormSection title="Vehicle" subtitle="Optional" icon="car-sport" tint="#cf5500">
+          <MasterDataDropdown
+            label="Vehicle type"
+            listKey={GateMasterDataKeys.VehicleType}
+            masterData={resources.masterData}
+            {...(communityId ? { communityId } : {})}
+            value={vehicleType}
+            onChange={setVehicleType}
+            placeholder="Select a vehicle type"
+            allowClear
+          />
+          <AppTextField label="Vehicle number" value={vehicle} onChangeText={setVehicle} placeholder="e.g. MH12AB1234" autoCapitalize="characters" editable={!create.running} />
+        </FormSection>
+
+        <FormSection title="Photo" subtitle="Capture the visitor for the record" icon="camera" tint={theme.color.warning}>
+          <PhotoPicker
+            label="Visitor photo"
+            files={resources.files}
+            upload={{ owningResourceType: 'VisitPass', communityId }}
+            value={photoFileId}
+            onChange={setPhotoFileId}
+            disabled={create.running}
+          />
+        </FormSection>
+
+        <FormSection title="When & access" subtitle="Visit date, validity and entries" icon="time" tint={theme.color.info}>
+          <DateField label="Date of visit" value={visitDate} onChange={(d) => setVisitDate(d ? d.toISOString() : null)} minimumDate={dateFromToday(0)} disabled={create.running} />
+          <DateField label="Valid until" required value={validUntil} onChange={(d) => setValidUntil(d ? d.toISOString() : null)} minimumDate={dateFromToday(0)} disabled={create.running} />
+          <AppTextField label="Entries allowed" value={entries} onChangeText={setEntries} placeholder="1" keyboardType="number-pad" editable={!create.running} />
+        </FormSection>
+
+        <AppButton title="Create pass" loading={create.running} onPress={onSubmit} accessibilityHint="Create a visit pass and get a shareable QR and code" />
+      </AsyncBoundary>
+    </FormScreen>
+  );
+}
+
+/** Share the scannable QR image (with the pass details as the caption) via the OS share sheet. */
+async function sharePass(result: CreateVisitPassResult): Promise<void> {
+  const caption =
+    `Your visit pass for ${result.pass.visitorName}\n` +
+    `One-time code: ${result.otp}\n` +
+    `Valid until: ${formatDateTime(result.pass.validUntilUtc)}\n` +
+    `(Scan the attached QR at the gate.)`;
+  await shareQrImage(result.pass.qrToken, caption);
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString();
+}
+
+const styles = StyleSheet.create({
+  qrWrap: { alignItems: 'center', paddingVertical: 8 },
+});
