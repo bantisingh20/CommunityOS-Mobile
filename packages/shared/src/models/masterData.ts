@@ -23,6 +23,7 @@ export const MasterDataKeys = {
   UnitType: 'Unit_Type',
   UnitStatus: 'Unit_Status',
   CommunityType: 'Community_Type',
+  AnnouncementCategory: 'Announcement_Category',
   HierarchyLevel: 'Hierarchy_Level',
   ResidentType: 'Resident_Type',
   ResidentVerificationStatus: 'Resident_Verification_Status',

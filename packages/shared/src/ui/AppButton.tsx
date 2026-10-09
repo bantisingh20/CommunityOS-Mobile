@@ -11,7 +11,7 @@ import { theme } from './theme';
 export interface AppButtonProps {
   title: string;
   onPress: PressableProps['onPress'];
-  variant?: 'primary' | 'secondary';
+  variant?: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
   loading?: boolean;
   /** Overrides the visible title for assistive tech when the title alone is ambiguous. */
@@ -38,6 +38,7 @@ export function AppButton({
 }: AppButtonProps) {
   const isDisabled = disabled || loading;
   const isPrimary = variant === 'primary';
+  const isDanger = variant === 'danger';
   return (
     <Pressable
       onPress={onPress}
@@ -49,15 +50,15 @@ export function AppButton({
       accessibilityState={{ disabled: isDisabled, busy: loading }}
       style={({ pressed }) => [
         styles.base,
-        isPrimary ? styles.primary : styles.secondary,
+        isPrimary ? styles.primary : isDanger ? styles.danger : styles.secondary,
         pressed && !isDisabled ? styles.pressed : null,
         isDisabled ? styles.disabled : null,
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={isPrimary ? theme.color.primaryText : theme.color.primary} />
+        <ActivityIndicator color={isPrimary ? theme.color.primaryText : isDanger ? theme.color.danger : theme.color.primary} />
       ) : (
-        <Text style={[styles.text, isPrimary ? styles.textPrimary : styles.textSecondary]}>
+        <Text style={[styles.text, isPrimary ? styles.textPrimary : isDanger ? styles.textDanger : styles.textSecondary]}>
           {title}
         </Text>
       )}
@@ -76,9 +77,11 @@ const styles = StyleSheet.create({
   },
   primary: { backgroundColor: theme.color.primary },
   secondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.color.primary },
+  danger: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.color.danger },
   pressed: { opacity: 0.85 },
   disabled: { backgroundColor: theme.color.disabled, borderColor: theme.color.disabled },
   text: { fontSize: theme.fontSize.body, fontWeight: '600' },
   textPrimary: { color: theme.color.primaryText },
   textSecondary: { color: theme.color.primary },
+  textDanger: { color: theme.color.danger },
 });

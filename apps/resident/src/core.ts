@@ -5,6 +5,7 @@ import {
   SecureTokenStore,
   createResourceClients,
   expoSecureStorage,
+  isRefreshTokenDead,
   resolveConfigFromEnv,
   type AppConfig,
   type LoginResponse,
@@ -34,8 +35,32 @@ export interface AppCore {
 export function createAppCore(): AppCore {
   const config = resolveConfigFromEnv();
   const tokenStore = new SecureTokenStore(expoSecureStorage(SecureStore));
-  const api = new ApiClient({ config, tokenStore });
-  const auth = new AuthService(api, tokenStore);
+  // Build the auth service first so the API client's 401 recovery can call it to silently refresh.
+  // `auth` is assigned just below; the refresher reads it lazily (by the time a 401 fires, it's set).
+  let auth: AuthService;
+  const api = new ApiClient({
+    config,
+    tokenStore,
+    // On a 401 the client calls this once (single-flight): swap the refresh token for a fresh access
+    // token. Returning the new token → the original request is retried transparently (no re-login).
+    // Returning null → the client just rethrows the 401 (it does NOT clear on its own now).
+    //
+    // Session-end policy lives here, where we can see WHY the refresh failed: only when the refresh
+    // token is genuinely dead (server rejected it) do we clear the store — that fires onCleared and
+    // routes to login. A transient failure (offline / timeout / 5xx) keeps the session so the user
+    // is never bounced to login over a network blip (Instagram/WhatsApp behaviour).
+    refreshToken: async () => {
+      try {
+        return await auth.refresh();
+      } catch (err) {
+        if (isRefreshTokenDead(err)) {
+          await tokenStore.clear();
+        }
+        return null;
+      }
+    },
+  });
+  auth = new AuthService(api, tokenStore);
   const resources = createResourceClients(api);
 
   const onAuthenticated = async (): Promise<void> => {

@@ -11,11 +11,11 @@ import { showSuccessAlert } from '../../ui/errorAlert';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { MasterDataKeys } from '../../models/masterData';
-import type { PagedData } from '../../models/envelope';
-import type { Resident, CommunicationPreference } from '../../models/resident';
+import type { CommunicationPreference } from '../../models/resident';
 import type { MasterDataEntry } from '../../models/masterData';
 import type { ResourceClients } from '../../resources';
 import { humanizeCode } from '../shared/status';
+import { useMyResident } from './useMyResident';
 
 export interface CommunicationPreferencesScreenProps {
   resources: ResourceClients;
@@ -53,11 +53,10 @@ function metaFor(code: string) {
  * `Notification_Category` list. Save sends only the changed set and surfaces a success toast.
  */
 export function CommunicationPreferencesScreen({ resources, onBack }: CommunicationPreferencesScreenProps) {
-  const me = useAsync<PagedData<Resident>>(
-    (signal) => resources.residents.list({ pageSize: 1 }, {}, { signal }),
-    [],
-  );
-  const residentId = me.data?.items[0]?.id ?? null;
+  // Resolve the signed-in resident via GET /residents/me (matched by the token's user id server-side)
+  // — not residents.list()[0], which can be a stranger for a non-resident principal.
+  const me = useMyResident(resources);
+  const residentId = me.data?.resident?.id ?? null;
 
   return (
     <FormScreen title="Notifications" subtitle="Choose what you're notified about" {...(onBack ? { onBack } : {})}>

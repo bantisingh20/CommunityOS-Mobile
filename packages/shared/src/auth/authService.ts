@@ -27,6 +27,26 @@ export class AuthService {
     return login;
   }
 
+  /**
+   * Silent re-auth: swap the stored refresh token for a fresh access token (+ rotated refresh),
+   * with no password. Called by the API client on a 401 and on cold start when the access token has
+   * expired. Persists the new tokens and returns the new access token. Throws (and the caller
+   * clears the session → login) when there's no refresh token or the server rejects it.
+   */
+  async refresh(): Promise<string> {
+    const refreshToken = await this.tokenStore.getRefreshToken();
+    if (!refreshToken) {
+      throw new Error('No refresh token');
+    }
+    // Anonymous: the access token may be expired, so don't send a (stale) bearer.
+    const result = await this.api.post<LoginResponse>('/api/v1/auth/refresh', {
+      body: { refreshToken },
+      anonymous: true,
+    });
+    await this.tokenStore.setFromLogin(result);
+    return result.accessToken;
+  }
+
   async logout(): Promise<void> {
     try {
       // Authenticated call; the server derives the session from the bearer token's jti.

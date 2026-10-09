@@ -19,9 +19,22 @@ export interface UploadFileOptions {
   readonly owningResourceId?: string;
 }
 
-/** The opaque stored-file reference the upload returns (a File_Service id). */
+/** The opaque stored-file reference the upload returns — the File_Service id used to download it. */
 export interface StoredFileReference {
   readonly reference: string;
+}
+
+/**
+ * Raw body of `POST /api/v1/files` (mirrors the backend `StoredFileReference` record). The stored
+ * file's `id` IS the reference used by `GET /api/v1/files/{id}` — the server does NOT return a field
+ * literally named `reference`, so the client must read `id`. (Reading a non-existent `reference`
+ * field was the bug: it came back undefined, so no photo id was ever saved or shown.)
+ */
+interface StoredFileResponse {
+  readonly id: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly sizeBytes: number;
 }
 
 /**
@@ -33,11 +46,33 @@ export interface StoredFileReference {
  * <p>React Native's `fetch` accepts a `{ uri, name, type }` part for a local file; no bytes are read
  * into JS. The browser/Node path (tests) can pass a `Blob`/`File` the same way.</p>
  */
+/** An RN `<Image source>` for an authorized file download: the resolved URL + bearer header. */
+export interface AuthorizedImageSource {
+  readonly uri: string;
+  readonly headers: Record<string, string>;
+}
+
 export class FileClient {
   constructor(
     private readonly api: ApiClient,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  /**
+   * Build an `<Image source>` for a stored file reference. There is no public file route — the bytes
+   * are only reachable through the authorized `GET /api/v1/files/{reference}` endpoint — so the
+   * bearer token is attached as a request header (RN `Image` supports `source={{ uri, headers }}`).
+   * Returns null when there is no reference or no token, so callers can fall back to a placeholder.
+   */
+  downloadSource(reference: string | null | undefined): AuthorizedImageSource | null {
+    if (!reference) return null;
+    const token = this.api.currentAccessToken();
+    if (!token) return null;
+    return {
+      uri: this.api.resolveUrl(`/api/v1/files/${encodeURIComponent(reference)}`),
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  }
 
   /** Upload a local file and return its stored reference. Throws {@link ApiRequestError} on failure. */
   async upload(file: LocalFile, options: UploadFileOptions): Promise<StoredFileReference> {
@@ -81,15 +116,16 @@ export class FileClient {
       });
     }
 
-    let envelope: ApiResult<StoredFileReference> | null = null;
+    let envelope: ApiResult<StoredFileResponse> | null = null;
     try {
-      envelope = (await response.json()) as ApiResult<StoredFileReference>;
+      envelope = (await response.json()) as ApiResult<StoredFileResponse>;
     } catch {
       envelope = null;
     }
 
-    if (envelope?.success && response.ok && envelope.data) {
-      return envelope.data;
+    if (envelope?.success && response.ok && envelope.data?.id) {
+      // The stored file's id is the opaque reference used to download it later.
+      return { reference: envelope.data.id };
     }
     if (envelope?.error) {
       throw ApiRequestError.fromApiError(envelope.error, envelope.correlationId ?? '', response.status);

@@ -11,9 +11,11 @@ import { HelpdeskClient } from './helpdeskClient';
 import { MaintenanceClient } from './maintenanceClient';
 import { AnnouncementsClient } from './announcementsClient';
 import { FileClient } from './fileClient';
+import { UsersClient } from './usersClient';
 
 export * from './query';
 export * from './fileClient';
+export * from './usersClient';
 export * from './idempotency';
 export * from './communitiesClient';
 export * from './unitsClient';
@@ -54,6 +56,8 @@ export interface ResourceClients {
   readonly announcements: AnnouncementsClient;
   /** File_Service multipart upload (photos etc.) → opaque stored-file reference. */
   readonly files: FileClient;
+  /** User admin: activate/deactivate + soft-delete a login (Req 3.1, 3.7). */
+  readonly users: UsersClient;
 }
 
 /** Construct the bundle of resource clients over an {@link ApiClient}. */
@@ -71,5 +75,6 @@ export function createResourceClients(api: ApiClient): ResourceClients {
     maintenance: new MaintenanceClient(api),
     announcements: new AnnouncementsClient(api),
     files: new FileClient(api),
+    users: new UsersClient(api),
   };
 }

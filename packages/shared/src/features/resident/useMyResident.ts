@@ -1,39 +1,31 @@
 import { useAsync } from '../../ui/hooks';
 import type { AsyncState } from '../../ui/hooks';
-import type { PagedData } from '../../models/envelope';
-import type { Resident } from '../../models/resident';
-import type { Unit } from '../../models/community';
+import { useAuth } from '../../auth/AuthContext';
+import type { Resident, ResidentHouseholdUnit } from '../../models/resident';
 import type { ResourceClients } from '../../resources';
 
-/** The signed-in resident plus their unit(s), resolved from the self-scoped lists. */
+/** The signed-in resident plus their OWN unit memberships (not the whole community). */
 export interface MyResident {
   readonly resident: Resident | null;
-  readonly units: Unit[];
+  /** The resident's own active unit memberships (+ unit details). Empty until a unit is assigned. */
+  readonly units: ResidentHouseholdUnit[];
 }
 
 /**
- * Resolve the signed-in resident and their unit(s) from the self-scoped lists (the same pattern the
- * Phase 2 resident self-view uses — a resident principal's `residents.list()` / `units.list()`
- * return only their own rows, so there's no `/me` endpoint to call). The gate resident screens
- * (pre-invite, approvals, recurring) all need the resident id and a host unit, so this keeps that
- * derivation in one place instead of three copies (steering: reuse, don't hand-roll).
+ * Resolve the SIGNED-IN resident and THEIR OWN unit(s) in ONE self-targeted call.
+ *
+ * <p>`residents.me()` hits `GET /residents/me`, which returns the resident row whose `UserId` is the
+ * access token's user (the Resident→User link) plus that resident's own active unit memberships — no
+ * list-and-filter, no second `/household` round trip. A superadmin/admin with no linked resident row
+ * gets `{ resident: null, units: [] }`, so the self-service screens show their empty state instead of
+ * a stranger's data.</p>
+ *
+ * <p>Re-runs when the signed-in user changes (keyed on `userId`).</p>
  */
 export function useMyResident(resources: ResourceClients): AsyncState<MyResident> {
+  const { userId } = useAuth();
   return useAsync<MyResident>(
-    async (signal) => {
-      const [residents, units] = await Promise.all([
-        resources.residents.list({ pageSize: 1 }, {}, { signal }),
-        resources.units.list({ pageSize: 25 }, {}, { signal }),
-      ]);
-      return {
-        resident: pickFirst(residents),
-        units: units.items,
-      };
-    },
-    [],
+    (signal) => resources.residents.me({ signal }),
+    [userId],
   );
-}
-
-function pickFirst(page: PagedData<Resident>): Resident | null {
-  return page.items.length > 0 ? (page.items[0] ?? null) : null;
 }

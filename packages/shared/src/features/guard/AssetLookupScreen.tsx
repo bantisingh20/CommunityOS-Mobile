@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
-import { LinkButton } from '../../ui/LinkButton';
 import { useAsync } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
@@ -24,16 +22,15 @@ export interface AssetLookupScreenProps {
 }
 
 /**
- * Staff asset QR-token lookup (Req 35.2). The staff member types (or pastes) the token printed on
- * the asset's QR label — or the asset serial — and looks it up. This mirrors the gate/parcel "scan"
- * flow: a plain text field + lookup, NO camera dependency (steering/ponytail — the operational apps
- * never add a scanner lib; a token/serial text field covers the same intent). The entered text drives
- * the tenant-scoped asset `search` (name / serial / location). Because the backend asset list is not
- * searchable by QR token, an exact `qrToken` match in the returned page is surfaced first as the
- * resolved asset; otherwise the search matches are listed to pick from.
+ * Staff asset QR-token lookup (Req 35.2) — redesigned to the shared card style. The staff member
+ * types/pastes the token on the asset's QR label (or the serial) and looks it up. A plain text field
+ * + lookup (NO camera here — ponytail: the maintenance lookup never needed a scanner; a token/serial
+ * field covers the same intent). The text drives the tenant-scoped asset `search` (name/serial/
+ * location); an exact `qrToken` match in the page is surfaced first as the resolved asset, otherwise
+ * the search matches are listed as **product-row cards** to pick from.
  *
  * <p>ponytail: naive client-side token match over one search page — fine for the bounded per-community
- * asset register; a server-side `qrToken` filter would be the upgrade path if registers grow large.</p>
+ * asset register; a server-side `qrToken` filter is the upgrade path if registers grow large.</p>
  */
 export function AssetLookupScreen({ resources, onOpenWorkOrders, onBack }: AssetLookupScreenProps) {
   const [token, setToken] = useState('');
@@ -54,10 +51,7 @@ export function AssetLookupScreen({ resources, onOpenWorkOrders, onBack }: Asset
   const rest = exact ? items.filter((a) => a.id !== exact.id) : items;
 
   return (
-    <Screen accessibilityLabel="Asset lookup">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the maintenance menu" /> : null}
-      <SectionHeading title="Find an asset" level={1} />
-
+    <FormScreen title="Find an asset" subtitle="Look up equipment by QR token or serial" {...(onBack ? { onBack } : {})}>
       <AppTextField
         label="QR token or serial"
         value={token}
@@ -84,13 +78,13 @@ export function AssetLookupScreen({ resources, onOpenWorkOrders, onBack }: Asset
         >
           {exact ? (
             <View style={styles.section}>
-              <SectionHeading title="Matched asset" />
+              <Text style={styles.sectionLabel}>MATCHED ASSET</Text>
               <AssetCard asset={exact} matched onOpenWorkOrders={onOpenWorkOrders} />
             </View>
           ) : null}
           {rest.length ? (
             <View style={styles.section}>
-              <SectionHeading title={exact ? 'Other matches' : 'Matches'} />
+              <Text style={styles.sectionLabel}>{exact ? 'OTHER MATCHES' : 'MATCHES'}</Text>
               <View style={styles.list}>
                 {rest.map((a) => (
                   <AssetCard key={a.id} asset={a} onOpenWorkOrders={onOpenWorkOrders} />
@@ -100,7 +94,7 @@ export function AssetLookupScreen({ resources, onOpenWorkOrders, onBack }: Asset
           ) : null}
         </AsyncBoundary>
       ) : null}
-    </Screen>
+    </FormScreen>
   );
 }
 
@@ -114,17 +108,22 @@ function AssetCard({
   onOpenWorkOrders?: (asset: Asset) => void;
 }) {
   return (
-    <View style={styles.card}>
-      <ListRow
-        title={asset.name}
-        subtitle={`${asset.serialNumber} · ${humanizeCode(asset.assetType)} · ${asset.location}`}
-        trailing={
-          <Badge
-            label={matched ? 'Matched' : humanizeCode(asset.status)}
-            tone={matched ? 'positive' : 'neutral'}
-          />
-        }
-      />
+    <View style={[styles.card, matched ? styles.cardMatched : null]}>
+      <View style={styles.cardTop}>
+        <View style={[styles.iconTile, { backgroundColor: matched ? '#e6f4ea' : `${theme.color.info}1f` }]}>
+          <Ionicons name="cube-outline" size={22} color={matched ? theme.color.success : theme.color.info} />
+        </View>
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle} numberOfLines={1}>{asset.name}</Text>
+          <Text style={styles.cardSub} numberOfLines={2}>
+            {asset.serialNumber} · {humanizeCode(asset.assetType)} · {asset.location}
+          </Text>
+        </View>
+        <Badge
+          label={matched ? 'Matched' : humanizeCode(asset.status)}
+          tone={matched ? 'positive' : 'neutral'}
+        />
+      </View>
       {onOpenWorkOrders ? (
         <AppButton
           title="Work orders"
@@ -143,6 +142,19 @@ function emptyPage(): PagedData<Asset> {
 
 const styles = StyleSheet.create({
   section: { gap: theme.spacing.sm, marginTop: theme.spacing.sm },
+  sectionLabel: { fontSize: theme.fontSize.caption, fontWeight: '800', color: theme.color.mutedText, letterSpacing: 0.5 },
   list: { gap: theme.spacing.md },
-  card: { gap: theme.spacing.xs },
+  card: {
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.shadow.soft,
+  },
+  cardMatched: { borderWidth: 1, borderColor: theme.color.success },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
 });

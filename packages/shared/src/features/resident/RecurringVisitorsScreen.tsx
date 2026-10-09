@@ -18,8 +18,7 @@ import { DEFAULT_PAGE_SIZE } from '../../models/query';
 import { GateMasterDataKeys, RecurringVisitorStatus } from '../../models/gate';
 import type { PagedData } from '../../models/envelope';
 import type { RecurringVisitor } from '../../models/gate';
-import type { Unit } from '../../models/community';
-import type { Resident } from '../../models/resident';
+import type { Resident, ResidentHouseholdUnit } from '../../models/resident';
 import type { ResourceClients } from '../../resources';
 import { gateStatusTone, humanizeCode } from '../shared/status';
 import { useMyResident } from './useMyResident';
@@ -156,7 +155,7 @@ function AddRecurringModal({
   visible: boolean;
   resources: ResourceClients;
   resident: Resident;
-  units: Unit[];
+  units: ResidentHouseholdUnit[];
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -169,7 +168,7 @@ function AddRecurringModal({
 
   useEffect(() => {
     if (!unitId && units.length === 1 && units[0]) {
-      setUnitId(units[0].id);
+      setUnitId(units[0].unitId);
     }
   }, [units, unitId]);
 
@@ -191,7 +190,7 @@ function AddRecurringModal({
   const canSubmit =
     Boolean(unitId) && name.trim().length > 0 && Boolean(category) && dayMask > 0 && isDate(startDate) && isDate(endDate);
 
-  const unitOptions = units.map((u) => ({ value: u.id, label: `Unit ${u.unitNumber}` }));
+  const unitOptions = units.map((u) => ({ value: u.unitId, label: `Unit ${u.unitNumber}` }));
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>

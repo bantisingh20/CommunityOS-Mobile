@@ -1,14 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { Pager } from '../../ui/Pager';
 import { FormBanner } from '../../ui/FormBanner';
-import { LinkButton } from '../../ui/LinkButton';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
@@ -32,12 +30,11 @@ export interface EntryExitLogScreenProps {
 type Filter = 'onsite' | 'all';
 
 /**
- * Guard entry/exit log + exit capture (Req 25.3, 25.4, 25.5). Defaults to the "on-site" view —
- * visitors with an open entry and no exit yet — so a guard can close out a visitor leaving the gate
- * with one tap. The record-exit write is offline-aware: if it fails because the gate is offline, it
- * is queued (with a stable idempotency key) and flushed on reconnect, so a dropped signal never
- * loses an exit and never double-records it (Req 65.6 spirit, 63.3). A segmented control switches to
- * the full chronological log.
+ * Guard entry/exit log + exit capture (Req 25.3, 25.4, 25.5) — redesigned to the shared card style.
+ * Defaults to the "on-site" view (visitors with an open entry, no exit yet) so a guard can close out
+ * a leaving visitor in one tap. The record-exit write is offline-aware: a transport failure queues it
+ * (stable idempotency key) and flushes on reconnect, so a dropped signal never loses or double-records
+ * an exit (Req 63.3). A segmented control switches to the full chronological log.
  */
 export function EntryExitLogScreen({ resources, offlineQueue, onBack }: EntryExitLogScreenProps) {
   const [filter, setFilter] = useState<Filter>('onsite');
@@ -104,6 +101,7 @@ export function EntryExitLogScreen({ resources, offlineQueue, onBack }: EntryExi
   });
 
   const items = data?.items ?? [];
+  const total = data?.totalCount ?? 0;
 
   const switchFilter = (f: Filter) => {
     setPage(1);
@@ -112,27 +110,14 @@ export function EntryExitLogScreen({ resources, offlineQueue, onBack }: EntryExi
   };
 
   return (
-    <Screen accessibilityLabel="Entry and exit log">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the gate menu" /> : null}
-      <SectionHeading title="Entry / exit" level={1} />
-
+    <FormScreen
+      title="Entry / exit"
+      subtitle={filter === 'onsite' ? (total ? `${total} on-site now` : 'Who is on-site') : 'Full gate log'}
+      {...(onBack ? { onBack } : {})}
+    >
       <View style={styles.segment} accessibilityRole="tablist">
-        <View style={styles.flex}>
-          <AppButton
-            title="On-site"
-            variant={filter === 'onsite' ? 'primary' : 'secondary'}
-            onPress={() => switchFilter('onsite')}
-            accessibilityHint="Show visitors currently on-site"
-          />
-        </View>
-        <View style={styles.flex}>
-          <AppButton
-            title="All"
-            variant={filter === 'all' ? 'primary' : 'secondary'}
-            onPress={() => switchFilter('all')}
-            accessibilityHint="Show the full entry and exit log"
-          />
-        </View>
+        <SegTab label="On-site" active={filter === 'onsite'} onPress={() => switchFilter('onsite')} />
+        <SegTab label="All" active={filter === 'all'} onPress={() => switchFilter('all')} />
       </View>
 
       {notice ? <FormBanner message={notice} tone="success" /> : null}
@@ -163,11 +148,23 @@ export function EntryExitLogScreen({ resources, offlineQueue, onBack }: EntryExi
             const onSite = e.exitTsUtc === null;
             return (
               <View key={e.id} style={styles.card}>
-                <ListRow
-                  title={e.visitorName}
-                  subtitle={`${humanizeCode(e.category)} · in ${formatTime(e.entryTsUtc)}${e.exitTsUtc ? ` · out ${formatTime(e.exitTsUtc)}` : ''}`}
-                  trailing={<Badge label={onSite ? 'On-site' : 'Left'} tone={onSite ? 'warning' : 'neutral'} />}
-                />
+                <View style={styles.cardTop}>
+                  <View style={[styles.iconTile, { backgroundColor: onSite ? `${theme.color.warning}1f` : '#eef1f5' }]}>
+                    <Ionicons
+                      name={onSite ? 'walk' : 'exit-outline'}
+                      size={22}
+                      color={onSite ? theme.color.warning : theme.color.mutedText}
+                    />
+                  </View>
+                  <View style={styles.cardBody}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{e.visitorName}</Text>
+                    <Text style={styles.cardSub} numberOfLines={1}>
+                      {humanizeCode(e.category)} · in {formatTime(e.entryTsUtc)}
+                      {e.exitTsUtc ? ` · out ${formatTime(e.exitTsUtc)}` : ''}
+                    </Text>
+                  </View>
+                  <Badge label={onSite ? 'On-site' : 'Left'} tone={onSite ? 'warning' : 'neutral'} />
+                </View>
                 {onSite ? (
                   <AppButton
                     title="Record exit"
@@ -188,7 +185,21 @@ export function EntryExitLogScreen({ resources, offlineQueue, onBack }: EntryExi
           <Pager page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} onPageChange={setPage} disabled={loading} />
         ) : null}
       </AsyncBoundary>
-    </Screen>
+    </FormScreen>
+  );
+}
+
+/** A pill tab in the segmented filter. */
+function SegTab({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      style={[styles.segTab, active ? styles.segTabActive : null]}
+    >
+      <Text style={[styles.segText, active ? styles.segTextActive : null]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -215,9 +226,30 @@ function formatTime(iso: string): string {
 }
 
 const styles = StyleSheet.create({
-  segment: { flexDirection: 'row', gap: theme.spacing.sm },
-  flex: { flex: 1 },
+  segment: {
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.pill,
+    padding: 4,
+    ...theme.shadow.soft,
+  },
+  segTab: { flex: 1, alignItems: 'center', paddingVertical: theme.spacing.sm, borderRadius: theme.radius.pill },
+  segTabActive: { backgroundColor: theme.color.primary },
+  segText: { fontSize: theme.fontSize.label, fontWeight: '700', color: theme.color.mutedText },
+  segTextActive: { color: theme.color.primaryText },
   list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
-  card: { gap: theme.spacing.xs },
+  card: {
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.shadow.soft,
+  },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
   pending: { gap: theme.spacing.sm },
 });

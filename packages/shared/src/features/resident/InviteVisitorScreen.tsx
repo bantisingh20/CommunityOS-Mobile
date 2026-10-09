@@ -15,7 +15,6 @@ import { QrCode, shareQrImage } from '../../ui/QrCode';
 import { useAsyncAction } from '../../ui/hooks';
 import { emitToast } from '../../ui/toastBus';
 import { theme } from '../../ui/theme';
-import type { Unit } from '../../models/community';
 import type { CreateVisitPassResult } from '../../models/gate';
 import { GateMasterDataKeys } from '../../models/gate';
 import type { ResourceClients } from '../../resources';
@@ -72,22 +71,18 @@ export function InviteVisitorScreen({ resources, onBack }: InviteVisitorScreenPr
 
   const units = me.data?.units ?? [];
   const resident = me.data?.resident ?? null;
-  const selectedUnit = useMemo(() => units.find((u) => u.id === unitId) ?? units[0] ?? null, [units, unitId]);
+  // Use the resident's unit only when there's exactly one; never guess "the first of many".
+  const soleUnitId = units.length === 1 ? (units[0]?.unitId ?? null) : null;
+  const effectiveUnitId = unitId ?? soleUnitId;
+  const selectedUnit = useMemo(() => units.find((u) => u.unitId === effectiveUnitId) ?? null, [units, effectiveUnitId]);
   const communityId = selectedUnit?.communityId ?? resident?.communityId ?? '';
-
-  // Default to the sole unit when the resident has exactly one.
-  useEffect(() => {
-    if (!unitId && units.length === 1 && units[0]) {
-      setUnitId(units[0].id);
-    }
-  }, [units, unitId]);
 
   const create = useAsyncAction(() => {
     const personsNum = Number(persons.trim() || '1');
     const entriesNum = Number(entries.trim() || '1');
     return resources.gate
       .createVisitPass({
-        hostUnitId: selectedUnit!.id,
+        hostUnitId: selectedUnit!.unitId,
         visitorName: visitorName.trim(),
         validUntilUtc: endOfDay(validUntil!),
         maxUses: entriesNum,
@@ -106,7 +101,7 @@ export function InviteVisitorScreen({ resources, onBack }: InviteVisitorScreenPr
       });
   });
 
-  const unitOptions = units.map((u: Unit) => ({ value: u.id, label: `Unit ${u.unitNumber} · ${humanizeCode(u.unitType)}` }));
+  const unitOptions = units.map((u) => ({ value: u.unitId, label: `Unit ${u.unitNumber} · ${humanizeCode(u.unitType)}` }));
 
   const onSubmit = () => {
     if (!selectedUnit) { warn('Select the unit the visitor is coming to.'); return; }
@@ -177,7 +172,9 @@ export function InviteVisitorScreen({ resources, onBack }: InviteVisitorScreenPr
         onRetry={me.reload}
       >
         <FormSection title="Visitor" icon="person" tint={theme.color.primary}>
-          <Select label="Host unit" required value={selectedUnit?.id ?? null} options={unitOptions} onChange={setUnitId} placeholder="Select your unit" />
+          {units.length > 1 ? (
+            <Select label="Host unit" required value={effectiveUnitId} options={unitOptions} onChange={setUnitId} placeholder="Select your unit" />
+          ) : null}
           <AppTextField label="Visitor name" required value={visitorName} onChangeText={setVisitorName} placeholder="Who are you inviting?" autoCapitalize="words" editable={!create.running} />
           <AppTextField label="Contact number" value={phone} onChangeText={setPhone} placeholder="Visitor's phone" keyboardType="phone-pad" editable={!create.running} />
           <AppTextField label="Whom to meet / flat" value={whomToMeet} onChangeText={setWhomToMeet} placeholder="Person or flat they're visiting" autoCapitalize="words" editable={!create.running} />

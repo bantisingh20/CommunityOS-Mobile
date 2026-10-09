@@ -3,8 +3,10 @@ import type { PagedData } from '../models/envelope';
 import type { ListQuery } from '../models/query';
 import type {
   Resident,
+  ResidentMe,
   EmergencyContact,
   HouseholdMember,
+  ResidentHouseholdUnit,
   CommunicationPreference,
   CommunicationPreferenceUpdate,
 } from '../models/resident';
@@ -23,6 +25,9 @@ export interface UpdateResidentBody {
   readonly updateEmail?: boolean;
   readonly phone?: string | null;
   readonly updatePhone?: boolean;
+  /** Optional photo reference. Pair with `updatePhotoFileId` to apply (null clears it). */
+  readonly photoFileId?: string | null;
+  readonly updatePhotoFileId?: boolean;
 }
 
 /** Create a resident record (Req 15.1). Used to add a new household member (person) before associating them to a unit. */
@@ -34,6 +39,8 @@ export interface CreateResidentBody {
   readonly phone?: string;
   /** Optional login account to link; omit for a member with no app login (managed by admin). */
   readonly userId?: string;
+  /** Optional File_Service photo reference; omit when none captured. */
+  readonly photoFileId?: string;
 }
 
 /** Add a family/household member to a unit (Req 15.2). */
@@ -79,9 +86,8 @@ export interface ResidentListFilters {
  * (verify/reject/resubmit, Req 17.x), emergency contacts (Req 15.3) and communication preferences
  * (Req 20.1, 20.2, 66.3). Thin, envelope-aware wrapper over {@link ApiClient}.
  *
- * <p>The list is tenant-scoped server-side; a resident principal is self-scoped, so calling
- * {@link list} as a resident returns only their own resident row(s) — which is how a resident
- * self-view derives its own resident id without a dedicated `/me` endpoint.</p>
+ * <p>The signed-in person's own "who am I" (name + units) comes from {@link me} — a single
+ * self-targeted call. Do NOT list residents and filter by userId client-side to find yourself.</p>
  *
  * <p>The write actions pass an `Idempotency-Key` so a retried approve/reject/resubmit replays the
  * original result instead of re-running the transition (the Task 12.3 approve-once workflow).</p>
@@ -112,12 +118,27 @@ export class ResidentsClient {
     return this.api.get<Resident>(`/api/v1/residents/${id}`, options);
   }
 
+  /**
+   * The SIGNED-IN person's own resident row + their own unit memberships (Resident.UserId == token
+   * user). One self-targeted call for "who am I" — the header name and the self-service unit pickers.
+   * `resident` is null when the principal has no linked resident row (e.g. superadmin). Never
+   * lists-and-filters residents to find yourself.
+   */
+  me(options?: { signal?: AbortSignal }): Promise<ResidentMe> {
+    return this.api.get<ResidentMe>('/api/v1/residents/me', options);
+  }
+
   /** Create a resident record (Req 15.1) — e.g. a new household/family member person. */
   create(body: CreateResidentBody): Promise<Resident> {
     return this.api.post<Resident>('/api/v1/residents', {
       body,
       idempotencyKey: this.makeIdempotencyKey(),
     });
+  }
+
+  /** Soft-delete a resident record (Req 15.5). Retained + retrievable with includeArchived. */
+  delete(id: string): Promise<unknown> {
+    return this.api.delete<unknown>(`/api/v1/residents/${id}`);
   }
 
   /**
@@ -177,6 +198,11 @@ export class ResidentsClient {
     return this.api.post<Resident>(`/api/v1/residents/${id}/resubmit`, {
       idempotencyKey: this.makeIdempotencyKey(),
     });
+  }
+
+  /** The resident's OWN active unit memberships (+ unit details) — their real units, not the community (Req 15.2). */
+  listHousehold(id: string, options?: { signal?: AbortSignal }): Promise<ResidentHouseholdUnit[]> {
+    return this.api.get<ResidentHouseholdUnit[]>(`/api/v1/residents/${id}/household`, options);
   }
 
   /** A resident's emergency contacts (Req 15.3). */

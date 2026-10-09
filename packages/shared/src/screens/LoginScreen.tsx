@@ -17,6 +17,7 @@ import { LinkButton } from '../ui/LinkButton';
 import { theme } from '../ui/theme';
 import { useSafeInsets } from '../ui/safeInsets';
 import { toFormError, type FormErrorView } from '../api/formError';
+import { ApiRequestError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 
 export interface LoginScreenProps {
@@ -69,7 +70,15 @@ export function LoginScreen({ appTitle, onForgotPassword, headerSlot }: LoginScr
       await login({ identifier: identifier.trim(), password, platform: Platform.OS });
       // On success the AuthProvider switches the shell to the authenticated app — nothing to do.
     } catch (err) {
-      setError(toFormError(err));
+      const view = toFormError(err);
+      // On the LOGIN screen specifically, an UNAUTHENTICATED failure IS a bad credential (unless the
+      // account is locked, which carries its own message). The global mapper now says "session
+      // ended" for in-app 401s, so restore the credential wording here where it's the right message.
+      if (err instanceof ApiRequestError && err.code === 'UNAUTHENTICATED' && !/lock/i.test(err.message)) {
+        setError({ message: 'The phone number or password is incorrect. Please try again.', fieldErrors: view.fieldErrors });
+      } else {
+        setError(view);
+      }
     } finally {
       setSubmitting(false);
     }

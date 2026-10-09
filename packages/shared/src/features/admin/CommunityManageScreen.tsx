@@ -1,41 +1,136 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { FormScreen } from '../../ui/FormScreen';
+import { AppTextField } from '../../ui/AppTextField';
+import { AppButton } from '../../ui/AppButton';
+import { BottomSheet } from '../../ui/BottomSheet';
+import { MasterDataDropdown } from '../../ui/MasterDataDropdown';
+import { useAsyncAction } from '../../ui/hooks';
+import { showSuccessAlert } from '../../ui/errorAlert';
+import { emitToast } from '../../ui/toastBus';
 import { theme } from '../../ui/theme';
+import { MasterDataKeys } from '../../models/masterData';
 import type { Community } from '../../models/community';
+import type { ResourceClients } from '../../resources';
 import { humanizeCode } from '../shared/status';
 
 export interface CommunityManageScreenProps {
+  resources: ResourceClients;
   community: Community;
-  onEdit: () => void;
   onWings: () => void;
-  onAddUnit: () => void;
   onViewUnits: () => void;
   onBack?: () => void;
 }
 
 /**
- * Management hub for one community (super-admin). A simple list of actions — edit the society,
- * manage its wings/structure, add a unit, or browse its units — each pushing its own route so the
- * hardware back returns here. Keeps the community-admin surface route-based and discoverable without
- * a heavy menu. Uses the shared {@link FormScreen} scaffold.
+ * Management hub for one community (super-admin). A simple list of actions — edit the society (in a
+ * bottom sheet, since it's only name + type), manage its wings/structure, or browse/manage its
+ * units — each pushing its own route so the hardware back returns here. Keeps the community-admin
+ * surface route-based and discoverable without a heavy menu. Uses the shared {@link FormScreen}.
  */
 export function CommunityManageScreen({
+  resources,
   community,
-  onEdit,
   onWings,
-  onAddUnit,
   onViewUnits,
   onBack,
 }: CommunityManageScreenProps) {
+  // Reflect edits locally so the header (name/type) updates without a round-trip to the list.
+  const [current, setCurrent] = useState<Community>(community);
+  useEffect(() => { setCurrent(community); }, [community]);
+  const [editing, setEditing] = useState(false);
+
   return (
-    <FormScreen title={community.name} subtitle={humanizeCode(community.communityType)} {...(onBack ? { onBack } : {})}>
-      <ActionRow icon="create-outline" tint={theme.color.primary} label="Edit community" hint="Change name or type" onPress={onEdit} />
+    <FormScreen title={current.name} subtitle={humanizeCode(current.communityType)} {...(onBack ? { onBack } : {})}>
+      <ActionRow icon="create-outline" tint={theme.color.primary} label="Edit community" hint="Change name or type" onPress={() => setEditing(true)} />
       <ActionRow icon="git-branch-outline" tint="#8250df" label="Wings & structure" hint="Add wings, buildings, floors" onPress={onWings} />
-      <ActionRow icon="add-circle-outline" tint={theme.color.success} label="Add a unit" hint="Create a flat / unit" onPress={onAddUnit} />
-      <ActionRow icon="grid-outline" tint={theme.color.info} label="View units" hint="Browse this community's units" onPress={onViewUnits} />
+      <ActionRow icon="grid-outline" tint={theme.color.info} label="Manage units" hint="Browse, add or edit units" onPress={onViewUnits} />
+
+      <EditCommunitySheet
+        resources={resources}
+        community={current}
+        visible={editing}
+        onClose={() => setEditing(false)}
+        onSaved={(updated) => { setCurrent(updated); setEditing(false); }}
+      />
     </FormScreen>
+  );
+}
+
+/**
+ * Keyboard-avoiding bottom-sheet form to edit a community's name + type (Req 12.2) — the same sheet
+ * pattern as the Security/Resident/Unit/Wings admin screens. Only two fields, so a full page would
+ * be overkill; this edits in place and reports the updated community back to the hub.
+ */
+function EditCommunitySheet({
+  resources,
+  community,
+  visible,
+  onClose,
+  onSaved,
+}: {
+  resources: ResourceClients;
+  community: Community;
+  visible: boolean;
+  onClose: () => void;
+  onSaved: (updated: Community) => void;
+}) {
+  const [name, setName] = useState(community.name);
+  const [communityType, setCommunityType] = useState<string | null>(community.communityType);
+
+  // Reset the fields whenever the sheet opens for a (possibly new) community.
+  useEffect(() => {
+    if (visible) {
+      setName(community.name);
+      setCommunityType(community.communityType);
+    }
+  }, [visible, community]);
+
+  const save = useAsyncAction(async () => {
+    const updated = await resources.communities.update(community.id, {
+      name: name.trim(),
+      communityType: communityType!,
+    });
+    showSuccessAlert('Community updated.');
+    onSaved(updated);
+  });
+
+  const onSubmit = () => {
+    if (!name.trim()) { emitToast({ tone: 'error', title: 'Check the form', message: 'Enter a community name.' }); return; }
+    if (!communityType) { emitToast({ tone: 'error', title: 'Check the form', message: 'Choose a community type.' }); return; }
+    void save.run();
+  };
+
+  return (
+    <BottomSheet
+      visible={visible}
+      title="Edit community"
+      onClose={onClose}
+      footer={<AppButton title="Save changes" loading={save.running} onPress={onSubmit} accessibilityHint="Saves the community name and type" />}
+    >
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+        <AppTextField
+          label="Name"
+          required
+          value={name}
+          onChangeText={setName}
+          placeholder="e.g. Shree Krishna Residency"
+          editable={!save.running}
+          {...(save.error?.fieldErrors?.name ? { error: save.error.fieldErrors.name } : {})}
+        />
+        <MasterDataDropdown
+          label="Community type"
+          required
+          listKey={MasterDataKeys.CommunityType}
+          masterData={resources.masterData}
+          value={communityType}
+          onChange={setCommunityType}
+          communityId={community.id}
+          placeholder="Choose a type"
+        />
+      </ScrollView>
+    </BottomSheet>
   );
 }
 
@@ -87,4 +182,7 @@ const styles = StyleSheet.create({
   text: { flex: 1 },
   label: { fontSize: theme.fontSize.body, fontWeight: '700', color: theme.color.text },
   hint: { fontSize: theme.fontSize.caption, color: theme.color.mutedText, marginTop: 2 },
+
+  // Bottom-sheet field column (sheet chrome is the shared BottomSheet).
+  sheetScroll: { gap: theme.spacing.md, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm },
 });

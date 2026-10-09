@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AppTextField } from '../../ui/AppTextField';
-import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { Pager } from '../../ui/Pager';
-import { LinkButton } from '../../ui/LinkButton';
 import { useAsync } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
@@ -26,10 +23,10 @@ export interface GuardLookupScreenProps {
 type Mode = 'units' | 'residents';
 
 /**
- * Guard read-only lookup (Phase 2 minimal guard need): search units or residents, scoped
- * server-side to the guard's authorized communities. Read-only — no verification or edit actions
- * (those live in the resident/admin app). Reuses the same shared list primitives as the admin
- * screens so the two apps stay consistent (steering: reuse, don't hand-roll).
+ * Guard read-only lookup (Phase 2 minimal guard need) — redesigned to the shared card style. Search
+ * units or residents, scoped server-side to the guard's authorized communities. Read-only (no verify
+ * or edit — those live in the resident/admin app). A pill segmented control switches the entity;
+ * results render as **product-row cards**.
  */
 export function GuardLookupScreen({ resources, onBack }: GuardLookupScreenProps) {
   const [mode, setMode] = useState<Mode>('units');
@@ -43,27 +40,10 @@ export function GuardLookupScreen({ resources, onBack }: GuardLookupScreenProps)
   };
 
   return (
-    <Screen accessibilityLabel="Lookup">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to home" /> : null}
-      <SectionHeading title="Lookup" level={1} />
-
+    <FormScreen title="Lookup" subtitle="Find a unit or resident" {...(onBack ? { onBack } : {})}>
       <View style={styles.segment} accessibilityRole="tablist">
-        <View style={styles.flex}>
-          <AppButton
-            title="Units"
-            variant={mode === 'units' ? 'primary' : 'secondary'}
-            onPress={() => switchMode('units')}
-            accessibilityHint="Look up units"
-          />
-        </View>
-        <View style={styles.flex}>
-          <AppButton
-            title="Residents"
-            variant={mode === 'residents' ? 'primary' : 'secondary'}
-            onPress={() => switchMode('residents')}
-            accessibilityHint="Look up residents"
-          />
-        </View>
+        <SegTab label="Units" active={mode === 'units'} onPress={() => switchMode('units')} />
+        <SegTab label="Residents" active={mode === 'residents'} onPress={() => switchMode('residents')} />
       </View>
 
       <AppTextField
@@ -83,7 +63,21 @@ export function GuardLookupScreen({ resources, onBack }: GuardLookupScreenProps)
       ) : (
         <ResidentResults resources={resources} search={search} page={page} onPageChange={setPage} />
       )}
-    </Screen>
+    </FormScreen>
+  );
+}
+
+/** A pill tab in the segmented control. */
+function SegTab({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      style={[styles.segTab, active ? styles.segTabActive : null]}
+    >
+      <Text style={[styles.segText, active ? styles.segTextActive : null]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -113,12 +107,16 @@ function UnitResults({
     >
       <View style={styles.list}>
         {items.map((u) => (
-          <ListRow
-            key={u.id}
-            title={`Unit ${u.unitNumber}`}
-            subtitle={`${humanizeCode(u.unitType)} · ${humanizeCode(u.unitStatus)}`}
-            trailing={<Badge label={humanizeCode(u.unitStatus)} tone="neutral" />}
-          />
+          <View key={u.id} style={styles.card}>
+            <View style={[styles.iconTile, { backgroundColor: `${theme.color.info}1f` }]}>
+              <Ionicons name="home" size={22} color={theme.color.info} />
+            </View>
+            <View style={styles.cardBody}>
+              <Text style={styles.cardTitle} numberOfLines={1}>Unit {u.unitNumber}</Text>
+              <Text style={styles.cardSub} numberOfLines={1}>{humanizeCode(u.unitType)}</Text>
+            </View>
+            <Badge label={humanizeCode(u.unitStatus)} tone="neutral" />
+          </View>
         ))}
       </View>
       {data ? (
@@ -154,12 +152,18 @@ function ResidentResults({
     >
       <View style={styles.list}>
         {items.map((r) => (
-          <ListRow
-            key={r.id}
-            title={r.name}
-            subtitle={`${humanizeCode(r.residentType)}${r.phone ? ` · ${r.phone}` : ''}`}
-            trailing={<Badge label={humanizeCode(r.verificationStatus)} tone={verificationTone(r.verificationStatus)} />}
-          />
+          <View key={r.id} style={styles.card}>
+            <View style={[styles.iconTile, { backgroundColor: `${theme.color.primary}1f` }]}>
+              <Ionicons name="person" size={22} color={theme.color.primary} />
+            </View>
+            <View style={styles.cardBody}>
+              <Text style={styles.cardTitle} numberOfLines={1}>{r.name}</Text>
+              <Text style={styles.cardSub} numberOfLines={1}>
+                {humanizeCode(r.residentType)}{r.phone ? ` · ${r.phone}` : ''}
+              </Text>
+            </View>
+            <Badge label={humanizeCode(r.verificationStatus)} tone={verificationTone(r.verificationStatus)} />
+          </View>
         ))}
       </View>
       {data ? (
@@ -170,7 +174,30 @@ function ResidentResults({
 }
 
 const styles = StyleSheet.create({
-  segment: { flexDirection: 'row', gap: theme.spacing.sm },
-  flex: { flex: 1 },
-  list: { gap: theme.spacing.sm, marginBottom: theme.spacing.md },
+  segment: {
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.pill,
+    padding: 4,
+    ...theme.shadow.soft,
+  },
+  segTab: { flex: 1, alignItems: 'center', paddingVertical: theme.spacing.sm, borderRadius: theme.radius.pill },
+  segTabActive: { backgroundColor: theme.color.primary },
+  segText: { fontSize: theme.fontSize.label, fontWeight: '700', color: theme.color.mutedText },
+  segTextActive: { color: theme.color.primaryText },
+  list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadow.soft,
+  },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
 });

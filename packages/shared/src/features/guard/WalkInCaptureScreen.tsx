@@ -5,6 +5,7 @@ import { FormSection } from '../../ui/FormSection';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { EntityCard } from '../../ui/EntityCard';
+import { PhotoPicker } from '../../ui/PhotoPicker';
 import { MasterDataDropdown } from '../../ui/MasterDataDropdown';
 import { useAsyncAction } from '../../ui/hooks';
 import { emitToast } from '../../ui/toastBus';
@@ -14,7 +15,7 @@ import type { Unit } from '../../models/community';
 import type { Visitor } from '../../models/gate';
 import type { ResourceClients } from '../../resources';
 import { gateStatusTone, humanizeCode } from '../shared/status';
-import { UnitPicker } from './UnitPicker';
+import { UnitDropdown } from '../../ui/UnitDropdown';
 
 export interface WalkInCaptureScreenProps {
   resources: ResourceClients;
@@ -47,6 +48,7 @@ export function WalkInCaptureScreen({ resources, onBack }: WalkInCaptureScreenPr
   const [whomToMeet, setWhomToMeet] = useState('');
   const [duration, setDuration] = useState('');
   const [vehicle, setVehicle] = useState('');
+  const [photoFileId, setPhotoFileId] = useState<string | null>(null);
   const [registered, setRegistered] = useState<Visitor | null>(null);
 
   const register = useAsyncAction(() => {
@@ -63,6 +65,7 @@ export function WalkInCaptureScreen({ resources, onBack }: WalkInCaptureScreenPr
         ...(whomToMeet.trim() ? { whomToMeet: whomToMeet.trim() } : {}),
         ...(durationMinutes !== undefined ? { expectedDurationMinutes: durationMinutes } : {}),
         ...(vehicle.trim() ? { vehicleNumber: vehicle.trim() } : {}),
+        ...(photoFileId ? { photoFileId } : {}),
       })
       .then((v) => {
         setRegistered(v);
@@ -81,6 +84,7 @@ export function WalkInCaptureScreen({ resources, onBack }: WalkInCaptureScreenPr
     setWhomToMeet('');
     setDuration('');
     setVehicle('');
+    setPhotoFileId(null);
     register.reset();
   };
 
@@ -129,7 +133,7 @@ export function WalkInCaptureScreen({ resources, onBack }: WalkInCaptureScreenPr
   return (
     <FormScreen title="Register walk-in" subtitle="Capture the visitor's details" {...(onBack ? { onBack } : {})}>
       <FormSection title="Host unit" icon="home" tint={theme.color.info}>
-        <UnitPicker resources={resources} value={unit} onSelect={setUnit} />
+        <UnitDropdown resources={resources} value={unit} onSelect={setUnit} required disabled={busy} />
       </FormSection>
 
       <FormSection title="Visitor" icon="person" tint={theme.color.primary}>
@@ -142,6 +146,18 @@ export function WalkInCaptureScreen({ resources, onBack }: WalkInCaptureScreenPr
           autoCapitalize="words"
           editable={!busy}
         />
+        {unit ? (
+          <PhotoPicker
+            label="Photo of the person"
+            files={resources.files}
+            upload={{ owningResourceType: 'Visitor', communityId: unit.communityId }}
+            value={photoFileId}
+            onChange={setPhotoFileId}
+            disabled={busy}
+          />
+        ) : (
+          <Text style={styles.note}>Pick the host unit first to capture the visitor&apos;s photo.</Text>
+        )}
         <AppTextField
           label="Phone"
           value={phone}

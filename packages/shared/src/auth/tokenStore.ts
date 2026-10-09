@@ -84,8 +84,21 @@ export class SecureTokenStore {
   private roles: string[] = [];
   /** The identifier (email/phone) the user signed in with — for display in the UI only. */
   private displayName: string | null = null;
+  /** Listeners notified when the session is cleared (expiry/revocation/logout) so the app shell can route to login. */
+  private readonly clearedListeners = new Set<() => void>();
 
   constructor(private readonly storage: SecureStorage) {}
+
+  /**
+   * Subscribe to "session cleared" — fired by {@link clear} when the token store is wiped (expired
+   * token, server revocation, or logout). The app shell ({@link AuthProvider}) uses this to flip to
+   * the unauthenticated state so a mid-session expiry routes to login instead of leaving a screen
+   * showing a stale error. Returns an unsubscribe function.
+   */
+  onCleared(listener: () => void): () => void {
+    this.clearedListeners.add(listener);
+    return () => this.clearedListeners.delete(listener);
+  }
 
   /** Remember the identifier the user signed in with (display only; never a secret). */
   setDisplayName(identifier: string | null): void {
@@ -153,12 +166,24 @@ export class SecureTokenStore {
    * `sessionToken` is optional — the current backend returns a single access token; when a
    * refresh/session token is issued it is stored here for the refresh-or-logout flow.
    */
+  /** The persisted refresh token (opaque, for silent re-auth), or null when none. */
+  getRefreshToken(): Promise<string | null> {
+    return this.storage.getItem(SESSION_TOKEN_KEY);
+  }
+
+  /** Persist a rotated refresh token (after a successful /auth/refresh). */
+  async setRefreshToken(refreshToken: string): Promise<void> {
+    await this.storage.setItem(SESSION_TOKEN_KEY, refreshToken);
+  }
+
   async setFromLogin(login: LoginResponse, sessionToken?: string): Promise<void> {
     this.accessToken = login.accessToken;
     this.accessTokenExpiresAtUtc = login.expiresAtUtc;
     this.roles = [...login.roles];
-    if (sessionToken) {
-      await this.storage.setItem(SESSION_TOKEN_KEY, sessionToken);
+    // Persist the refresh token (preferred) or an explicit session token for silent re-auth.
+    const refresh = login.refreshToken ?? sessionToken;
+    if (refresh) {
+      await this.storage.setItem(SESSION_TOKEN_KEY, refresh);
     }
     // Persist the session so a reload/cold start restores it (see restore()).
     await this.storage.setItem(ACCESS_TOKEN_KEY, login.accessToken);
@@ -180,7 +205,10 @@ export class SecureTokenStore {
     if (expiresAt) {
       const exp = new Date(expiresAt).getTime();
       if (!Number.isNaN(exp) && exp <= Date.now()) {
-        await this.clear();
+        // The access token expired, but the REFRESH token is still valid — drop only the stale
+        // access token so a silent /auth/refresh can mint a new one (stay-logged-in). Wiping the
+        // refresh token here was the bug that forced a fresh login after the access token aged out.
+        await this.clearAccessTokenOnly();
         return false;
       }
     }
@@ -198,8 +226,24 @@ export class SecureTokenStore {
     this.accessTokenExpiresAtUtc = expiresAtUtc ?? this.accessTokenExpiresAtUtc;
   }
 
+  /**
+   * Drop only the (stale) access token + its persisted copy, KEEPING the refresh token and
+   * display name. Used when the access token has expired but the session is still re-establishable
+   * via /auth/refresh — the stay-signed-in path. Does NOT notify {@link onCleared} (the session is
+   * not ending, only the short-lived access token).
+   */
+  async clearAccessTokenOnly(): Promise<void> {
+    this.accessToken = null;
+    this.accessTokenExpiresAtUtc = null;
+    this.roles = [];
+    await this.storage.removeItem(ACCESS_TOKEN_KEY);
+    await this.storage.removeItem(ACCESS_EXPIRES_KEY);
+    await this.storage.removeItem(ROLES_KEY);
+  }
+
   /** Wipe everything — in-memory access token/roles and the persisted session token. */
   async clear(): Promise<void> {
+    const wasAuthenticated = this.accessToken !== null;
     this.accessToken = null;
     this.accessTokenExpiresAtUtc = null;
     this.roles = [];
@@ -209,6 +253,13 @@ export class SecureTokenStore {
     await this.storage.removeItem(ACCESS_EXPIRES_KEY);
     await this.storage.removeItem(ROLES_KEY);
     await this.storage.removeItem(DISPLAY_NAME_KEY);
+    // Notify the shell only when we actually transitioned from signed-in → signed-out, so it can
+    // route to login (fail-safe: a listener error must not break the clear).
+    if (wasAuthenticated) {
+      for (const listener of this.clearedListeners) {
+        try { listener(); } catch { /* ignore listener errors */ }
+      }
+    }
   }
 }
 

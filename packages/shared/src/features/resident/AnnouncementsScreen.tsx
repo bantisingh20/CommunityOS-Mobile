@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { FormScreen } from '../../ui/FormScreen';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { Pager } from '../../ui/Pager';
 import { useAsync } from '../../ui/hooks';
@@ -18,18 +18,25 @@ export interface AnnouncementsScreenProps {
   onBack?: () => void;
 }
 
-type AnnouncementsView = { name: 'list' } | { name: 'detail'; announcement: Announcement };
+/** A per-category icon so each notice reads at a glance. */
+function categoryIcon(code: string): keyof typeof Ionicons.glyphMap {
+  switch (code) {
+    case 'event': return 'calendar';
+    case 'maintenance': return 'construct';
+    case 'emergency': return 'warning';
+    default: return 'megaphone';
+  }
+}
 
 /**
  * Resident community notice board (MVP notices slice). Lists the announcements published for the
- * resident's community, newest-first and paginated. The list is tenant-scoped server-side (a
- * resident only sees their own community's board), so no scope is passed. Tapping a notice opens its
- * full body through a small internal view switch so the app navigator keeps a single "Announcements"
- * route (the hardware back pops the detail, then the screen). Read-only — the board is published by
- * the community, not the resident. Mirrors {@link TicketListScreen}.
+ * resident's community, newest-first and paginated, as rich **cards** that show everything inline —
+ * a category chip, the title, the published date, and the FULL message body — so a resident reads a
+ * notice without tapping through to a separate detail page. The list is tenant-scoped server-side (a
+ * resident only sees their own community's active board), so no scope is passed. Read-only — the
+ * board is published by the community admin, not the resident.
  */
 export function AnnouncementsScreen({ resources, onBack }: AnnouncementsScreenProps) {
-  const [view, setView] = useState<AnnouncementsView>({ name: 'list' });
   const [page, setPage] = useState(1);
 
   const { data, loading, error, reload } = useAsync<PagedData<Announcement>>(
@@ -38,24 +45,14 @@ export function AnnouncementsScreen({ resources, onBack }: AnnouncementsScreenPr
     [page],
   );
 
-  if (view.name === 'detail') {
-    const a = view.announcement;
-    return (
-      <FormScreen title="Announcement" onBack={() => setView({ name: 'list' })}>
-        <View style={styles.detail}>
-          <Badge label={humanizeCode(a.category)} tone={announcementCategoryTone(a.category)} />
-          <Text style={styles.detailTitle}>{a.title}</Text>
-          <Text style={styles.detailDate}>{formatDateTime(a.publishedAtUtc)}</Text>
-          <Text style={styles.detailBody}>{a.body}</Text>
-        </View>
-      </FormScreen>
-    );
-  }
-
   const items = data?.items ?? [];
 
   return (
-    <FormScreen title="Announcements" {...(onBack ? { onBack } : {})}>
+    <FormScreen
+      title="Announcements"
+      subtitle={data?.totalCount ? `${data.totalCount} ${data.totalCount === 1 ? 'notice' : 'notices'}` : 'Community notice board'}
+      {...(onBack ? { onBack } : {})}
+    >
       <AsyncBoundary
         loading={loading}
         error={error}
@@ -64,16 +61,24 @@ export function AnnouncementsScreen({ resources, onBack }: AnnouncementsScreenPr
         onRetry={reload}
       >
         <View style={styles.list}>
-          {items.map((a) => (
-            <ListRow
-              key={a.id}
-              title={a.title}
-              subtitle={`${humanizeCode(a.category)} · ${formatDate(a.publishedAtUtc)}`}
-              trailing={<Badge label={humanizeCode(a.category)} tone={announcementCategoryTone(a.category)} />}
-              onPress={() => setView({ name: 'detail', announcement: a })}
-              accessibilityHint={`Open announcement ${a.title}`}
-            />
-          ))}
+          {items.map((a) => {
+            const tone = announcementCategoryTone(a.category);
+            return (
+              <View key={a.id} style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View style={[styles.iconTile, { backgroundColor: `${toneColor(tone)}1f` }]}>
+                    <Ionicons name={categoryIcon(a.category)} size={20} color={toneColor(tone)} />
+                  </View>
+                  <View style={styles.headerText}>
+                    <Text style={styles.title}>{a.title}</Text>
+                    <Text style={styles.date}>{formatDateTime(a.publishedAtUtc)}</Text>
+                  </View>
+                  <Badge label={humanizeCode(a.category)} tone={tone} />
+                </View>
+                <Text style={styles.body}>{a.body}</Text>
+              </View>
+            );
+          })}
         </View>
         {data ? (
           <Pager
@@ -89,9 +94,14 @@ export function AnnouncementsScreen({ resources, onBack }: AnnouncementsScreenPr
   );
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString();
+/** Map a badge tone to its accent color for the icon tile (keeps the card color-coordinated). */
+function toneColor(tone: ReturnType<typeof announcementCategoryTone>): string {
+  switch (tone) {
+    case 'positive': return theme.color.success;
+    case 'warning': return theme.color.warning;
+    case 'danger': return theme.color.danger;
+    default: return theme.color.primary;
+  }
 }
 
 function formatDateTime(iso: string): string {
@@ -100,9 +110,18 @@ function formatDateTime(iso: string): string {
 }
 
 const styles = StyleSheet.create({
-  list: { gap: theme.spacing.sm, marginBottom: theme.spacing.md },
-  detail: { gap: theme.spacing.sm },
-  detailTitle: { fontSize: theme.fontSize.heading, fontWeight: '800', color: theme.color.text },
-  detailDate: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
-  detailBody: { fontSize: theme.fontSize.body, color: theme.color.text, lineHeight: 22, marginTop: theme.spacing.xs },
+  list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
+  card: {
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    ...theme.shadow.soft,
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
+  iconTile: { width: 40, height: 40, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  headerText: { flex: 1, gap: 2 },
+  title: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  date: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
+  body: { fontSize: theme.fontSize.body, color: theme.color.text, lineHeight: 22 },
 });

@@ -107,11 +107,12 @@ export class ApiClient {
           // Retry once with the new access token.
           return await this.send<T>(method, path, options, correlationId);
         }
-        // Only end the session when the token has genuinely expired. A 401 while the token is still
-        // valid is treated as a transient server/network blip (common on flaky links) — we keep the
-        // session so the user isn't bounced back to the login screen again and again. When there is
-        // no refresher and the token IS expired, clear so the app routes to login once.
-        if (this.tokenStore.isAccessTokenExpired()) {
+        // Refresh didn't produce a token. When a refresher is configured it OWNS the session-end
+        // decision (it clears only on a genuinely dead token, never on a transient failure), so we
+        // do nothing here and just rethrow — a network blip must not bounce the user to login. Only
+        // when NO refresher exists do we fall back to clearing an expired token so the app can route
+        // to login once.
+        if (!this.refreshToken && this.tokenStore.isAccessTokenExpired()) {
           await this.tokenStore.clear();
         }
       }

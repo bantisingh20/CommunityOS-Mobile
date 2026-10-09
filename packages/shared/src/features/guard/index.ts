@@ -1,5 +1,4 @@
 export * from './LookupScreen';
-export * from './UnitPicker';
 export * from './VisitPassVerifyScreen';
 export * from './WalkInCaptureScreen';
 export * from './EntryExitLogScreen';

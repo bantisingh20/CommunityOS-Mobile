@@ -10,6 +10,7 @@ import React, {
 import type { AuthService } from './authService';
 import type { SecureTokenStore } from './tokenStore';
 import type { LoginRequest, LoginResponse } from '../models/auth';
+import { isRefreshTokenDead } from './refreshFailure';
 
 /**
  * Session lifecycle for the app shell (Req 1.1, 1.3). `restoring` is the launch state while we
@@ -86,7 +87,7 @@ export function AuthProvider({
       }
       // Otherwise try to restore a persisted session from secure storage (survives a cold start or
       // a Metro reload). restore() loads a non-expired access token + roles + display name into
-      // memory; an expired/absent one leaves us unauthenticated.
+      // memory; an expired/absent one returns false.
       const restored = await tokenStore.restore();
       if (!active) {
         return;
@@ -98,11 +99,62 @@ export function AuthProvider({
         setStatus('authenticated');
         return;
       }
+      // No usable access token, but if a refresh token is persisted, silently re-auth (mobile: don't
+      // prompt login until the refresh token itself is gone/expired or the user logs out).
+      const refreshToken = await tokenStore.getRefreshToken();
+      if (refreshToken) {
+        // Retry a few times with backoff: a cold start right after the device wakes often races the
+        // network coming up. We only give up (show login) when the token is genuinely rejected, or
+        // after the retries are exhausted — and even then we KEEP the refresh token so the very next
+        // launch (once online) silently signs back in. This is the Instagram/WhatsApp behaviour.
+        const delaysMs = [0, 600, 1500];
+        for (let attempt = 0; attempt < delaysMs.length; attempt++) {
+          if (!active) return;
+          if (delaysMs[attempt]! > 0) {
+            await new Promise((r) => setTimeout(r, delaysMs[attempt]!));
+            if (!active) return;
+          }
+          try {
+            await auth.refresh();
+            if (!active) return;
+            setRoles(tokenStore.getRoles());
+            setUserId(tokenStore.getUserId());
+            setDisplayName(tokenStore.getDisplayName());
+            setStatus('authenticated');
+            return;
+          } catch (err) {
+            if (isRefreshTokenDead(err)) {
+              // The server actively rejected the token (invalid/expired/revoked). Only now do we
+              // wipe it and send the user to login — a real re-auth is genuinely required.
+              await tokenStore.clear();
+              if (!active) return;
+              break;
+            }
+            // Transient (offline / timeout / 5xx): keep the refresh token and retry. If this was the
+            // last attempt we fall through to the login screen for now, but the token stays stored so
+            // the next online launch restores silently — the user is NOT permanently logged out.
+          }
+        }
+      }
+      if (!active) return;
       setStatus('unauthenticated');
     })();
     return () => {
       active = false;
     };
+  }, [tokenStore, auth]);
+
+  // When the session is cleared mid-use (token expired, or the server revoked it — e.g. signed in
+  // on another device), the API client wipes the token store. Subscribe so the shell flips to the
+  // auth flow (login screen) instead of leaving the current screen showing a stale 401 toast.
+  useEffect(() => {
+    const unsubscribe = tokenStore.onCleared(() => {
+      setRoles([]);
+      setUserId(null);
+      setDisplayName(null);
+      setStatus('unauthenticated');
+    });
+    return unsubscribe;
   }, [tokenStore]);
 
   const login = useCallback(

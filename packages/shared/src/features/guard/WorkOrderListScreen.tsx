@@ -1,12 +1,10 @@
 import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { Pager } from '../../ui/Pager';
-import { LinkButton } from '../../ui/LinkButton';
 import { MasterDataDropdown } from '../../ui/MasterDataDropdown';
 import { useAsync } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
@@ -30,12 +28,12 @@ export interface WorkOrderListScreenProps {
 type WorkOrderView = { name: 'list' } | { name: 'detail'; workOrder: WorkOrder };
 
 /**
- * Staff work-order list (Req 36.2, 36.3). Lists the maintenance work orders in the staff member's
- * authorized communities, newest-first and paginated, with a configurable-status filter (from the
- * `Work_Order_Status` master-data list — never a hardcoded list). Tapping one opens its detail
- * (status/assign/parts/labour) through a small internal view switch so the app navigator keeps a
- * single route. An optional `assetId` narrows the list to one asset's orders. The list is
- * tenant-scoped server-side. Mirrors {@link ParcelListScreen}.
+ * Staff work-order list (Req 36.2, 36.3) — redesigned to the shared card style. Lists the maintenance
+ * work orders in the staff member's authorized communities, newest-first and paginated, with a
+ * configurable-status filter (from the `Work_Order_Status` master-data list — never hardcoded).
+ * Tapping a **product-row card** opens its detail (status/assign/parts/labour) through a small
+ * internal view switch so the app navigator keeps a single route. An optional `assetId` narrows the
+ * list to one asset's orders. Tenant-scoped server-side.
  */
 export function WorkOrderListScreen({ resources, assetId, title, onBack }: WorkOrderListScreenProps) {
   const [view, setView] = useState<WorkOrderView>({ name: 'list' });
@@ -67,12 +65,14 @@ export function WorkOrderListScreen({ resources, assetId, title, onBack }: WorkO
   }
 
   const items = data?.items ?? [];
+  const total = data?.totalCount ?? 0;
 
   return (
-    <Screen accessibilityLabel="Work orders">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the maintenance menu" /> : null}
-      <SectionHeading title={title ?? 'Work orders'} level={1} />
-
+    <FormScreen
+      title={title ?? 'Work orders'}
+      subtitle={total ? `${total} ${total === 1 ? 'job' : 'jobs'}` : 'Jobs to do & their status'}
+      {...(onBack ? { onBack } : {})}
+    >
       <MasterDataDropdown
         label="Filter by status"
         listKey={MaintenanceMasterDataKeys.WorkOrderStatus}
@@ -96,14 +96,27 @@ export function WorkOrderListScreen({ resources, assetId, title, onBack }: WorkO
       >
         <View style={styles.list}>
           {items.map((w) => (
-            <ListRow
+            <Pressable
               key={w.id}
-              title={w.title}
-              subtitle={`${humanizeCode(w.workOrderType)} · ${humanizeCode(w.priority)} · raised ${formatDate(w.createdAtUtc)}`}
-              trailing={<Badge label={humanizeCode(w.status)} tone={workOrderStatusTone(w.status)} />}
+              style={styles.card}
               onPress={() => setView({ name: 'detail', workOrder: w })}
-              accessibilityHint={`Open work order ${w.title}`}
-            />
+              accessibilityRole="button"
+              accessibilityLabel={`Open work order ${w.title}`}
+            >
+              <View style={[styles.iconTile, { backgroundColor: `${theme.color.warning}1f` }]}>
+                <Ionicons name="construct" size={22} color={theme.color.warning} />
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle} numberOfLines={1}>{w.title}</Text>
+                <Text style={styles.cardSub} numberOfLines={1}>
+                  {humanizeCode(w.workOrderType)} · {humanizeCode(w.priority)} · raised {formatDate(w.createdAtUtc)}
+                </Text>
+              </View>
+              <View style={styles.cardRight}>
+                <Badge label={humanizeCode(w.status)} tone={workOrderStatusTone(w.status)} />
+                <Ionicons name="chevron-forward" size={18} color={theme.color.mutedText} />
+              </View>
+            </Pressable>
           ))}
         </View>
         {data ? (
@@ -116,7 +129,7 @@ export function WorkOrderListScreen({ resources, assetId, title, onBack }: WorkO
           />
         ) : null}
       </AsyncBoundary>
-    </Screen>
+    </FormScreen>
   );
 }
 
@@ -126,5 +139,19 @@ function formatDate(iso: string): string {
 }
 
 const styles = StyleSheet.create({
-  list: { gap: theme.spacing.sm, marginBottom: theme.spacing.md },
+  list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadow.soft,
+  },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
+  cardRight: { alignItems: 'flex-end', gap: theme.spacing.xs },
 });

@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { AppTextField } from '../../ui/AppTextField';
-import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
-import { Badge } from '../../ui/Badge';
-import { useAsync } from '../../ui/hooks';
-import { theme } from '../../ui/theme';
-import { DEFAULT_PAGE_SIZE } from '../../models/query';
-import type { PagedData } from '../../models/envelope';
-import type { Unit } from '../../models/community';
-import type { ResourceClients } from '../../resources';
-import { humanizeCode } from '../shared/status';
+import { AppTextField } from './AppTextField';
+import { AsyncBoundary } from './AsyncBoundary';
+import { ListRow } from './ListRow';
+import { Badge } from './Badge';
+import { useAsync } from './hooks';
+import { theme } from './theme';
+import { DEFAULT_PAGE_SIZE } from '../models/query';
+import type { PagedData } from '../models/envelope';
+import type { Unit } from '../models/community';
+import type { ResourceClients } from '../resources';
+import { humanizeCode } from '../features/shared/status';
 
 export interface UnitPickerProps {
   resources: ResourceClients;

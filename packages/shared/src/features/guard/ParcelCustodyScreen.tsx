@@ -1,15 +1,14 @@
-import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import React, { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
+import { BottomSheet } from '../../ui/BottomSheet';
 import { Pager } from '../../ui/Pager';
 import { FormBanner } from '../../ui/FormBanner';
-import { LinkButton } from '../../ui/LinkButton';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
@@ -25,21 +24,19 @@ export interface ParcelCustodyScreenProps {
 }
 
 /**
- * Guard assign-custody (Req 29.1, 29.4). Lists parcels waiting to be moved into custody (defaults to
- * the `received` state) and lets the guard hold a chosen parcel in a secure custody location. The
- * guard enters the location code; the screen creates the custody location in the parcel's community
- * (an existing code replays as a CONFLICT the backend surfaces) and then assigns it — matching the
- * backend's "create custody-location, then assign" shape. Only one parcel may actively hold a given
- * location: a racing duplicate assignment is rejected as a CONFLICT (Req 29.4), surfaced inline.
+ * Guard assign-custody (Req 29.1, 29.4) — redesigned to the shared card + bottom-sheet style. Parcels
+ * waiting to be moved into custody (default `received`) render as **product-row cards**; tapping one
+ * opens a **keyboard-aware bottom sheet** to enter the custody location. The screen creates the
+ * custody location in the parcel's community (an existing code replays as a CONFLICT the backend
+ * surfaces) and then assigns it — matching the backend's "create custody-location, then assign" shape.
+ * Only one parcel may actively hold a given location: a racing duplicate is rejected as CONFLICT.
  *
- * <p>There is no custody-location LIST endpoint yet, so the guard types the location code rather than
- * picking from a dropdown (ponytail: don't invent a client call the backend doesn't expose; a picker
- * can replace the field when a list endpoint lands).</p>
+ * <p>No custody-location LIST endpoint exists yet, so the guard types the location code (ponytail:
+ * don't invent a client call the backend doesn't expose; a picker can replace the field later).</p>
  */
 export function ParcelCustodyScreen({ resources, onBack }: ParcelCustodyScreenProps) {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Parcel | null>(null);
-  const [locationCode, setLocationCode] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
   const { data, loading, error, reload } = useAsync<PagedData<Parcel>>(
@@ -52,75 +49,15 @@ export function ParcelCustodyScreen({ resources, onBack }: ParcelCustodyScreenPr
     [page],
   );
 
-  const assign = useAsyncAction(async () => {
-    if (!selected || locationCode.trim().length === 0) {
-      throw new Error('Missing fields');
-    }
-    // Create (or hit the existing) custody location in the parcel's community, then assign it.
-    const code = locationCode.trim();
-    const location = await resources.parcels.createCustodyLocation({
-      communityId: selected.communityId,
-      code,
-    });
-    await resources.parcels.assignCustodyLocation(selected.id, location.id);
-    setNotice(`Moved ${selected.trackingNumber} into custody at ${code}.`);
-    setSelected(null);
-    setLocationCode('');
-    reload();
-  });
-
   const items = data?.items ?? [];
-
-  if (selected) {
-    return (
-      <Screen accessibilityLabel="Assign custody">
-        <LinkButton
-          title="‹ Back"
-          onPress={() => {
-            setSelected(null);
-            setLocationCode('');
-            assign.reset();
-          }}
-          accessibilityHint="Return to the custody list"
-        />
-        <SectionHeading title="Assign custody" level={1} />
-        <ListRow
-          title={selected.trackingNumber}
-          subtitle={`${selected.provider} · ${humanizeCode(selected.category)}`}
-          trailing={<Badge label={humanizeCode(selected.status)} tone={parcelStatusTone(selected.status)} />}
-        />
-        {selected.isPriority ? <Badge label="Priority" tone="danger" /> : null}
-
-        <AppTextField
-          label="Custody location code"
-          value={locationCode}
-          onChangeText={setLocationCode}
-          placeholder="e.g. SHELF-A3 or LOCKER-12"
-          autoCapitalize="characters"
-          returnKeyType="done"
-          {...(assign.error?.fieldErrors.code ? { error: assign.error.fieldErrors.code } : {})}
-        />
-
-        {assign.error && !assign.error.fieldErrors.code ? (
-          <FormBanner message={assign.error.message} tone="error" />
-        ) : null}
-
-        <AppButton
-          title="Move into custody"
-          loading={assign.running}
-          disabled={locationCode.trim().length === 0}
-          onPress={() => assign.run()}
-          accessibilityHint="Hold this parcel in the entered custody location"
-        />
-      </Screen>
-    );
-  }
+  const total = data?.totalCount ?? 0;
 
   return (
-    <Screen accessibilityLabel="Parcels awaiting custody">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the parcels menu" /> : null}
-      <SectionHeading title="Assign custody" level={1} />
-
+    <FormScreen
+      title="Assign custody"
+      subtitle={total ? `${total} awaiting custody` : 'Parcels received at the gate'}
+      {...(onBack ? { onBack } : {})}
+    >
       {notice ? <FormBanner message={notice} tone="success" /> : null}
 
       <AsyncBoundary
@@ -132,17 +69,30 @@ export function ParcelCustodyScreen({ resources, onBack }: ParcelCustodyScreenPr
       >
         <View style={styles.list}>
           {items.map((p) => (
-            <ListRow
+            <Pressable
               key={p.id}
-              title={p.trackingNumber}
-              subtitle={`${p.provider} · ${humanizeCode(p.category)}${p.isPriority ? ' · Priority' : ''}`}
-              trailing={<Badge label={humanizeCode(p.status)} tone={parcelStatusTone(p.status)} />}
+              style={styles.card}
               onPress={() => {
                 setNotice(null);
                 setSelected(p);
               }}
-              accessibilityHint={`Assign custody for ${p.trackingNumber}`}
-            />
+              accessibilityRole="button"
+              accessibilityLabel={`Assign custody for ${p.trackingNumber}`}
+            >
+              <View style={[styles.iconTile, { backgroundColor: '#8250df1f' }]}>
+                <Ionicons name="cube" size={22} color="#8250df" />
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle} numberOfLines={1}>{p.trackingNumber}</Text>
+                <Text style={styles.cardSub} numberOfLines={1}>
+                  {p.provider} · {humanizeCode(p.category)}{p.isPriority ? ' · Priority' : ''}
+                </Text>
+              </View>
+              <View style={styles.cardRight}>
+                <Badge label={humanizeCode(p.status)} tone={parcelStatusTone(p.status)} />
+                <Ionicons name="chevron-forward" size={18} color={theme.color.mutedText} />
+              </View>
+            </Pressable>
           ))}
         </View>
         {data ? (
@@ -155,10 +105,113 @@ export function ParcelCustodyScreen({ resources, onBack }: ParcelCustodyScreenPr
           />
         ) : null}
       </AsyncBoundary>
-    </Screen>
+
+      <AssignCustodySheet
+        parcel={selected}
+        resources={resources}
+        onClose={() => setSelected(null)}
+        onAssigned={(msg) => {
+          setSelected(null);
+          setNotice(msg);
+          setPage(1);
+          reload();
+        }}
+      />
+    </FormScreen>
+  );
+}
+
+/** Keyboard-aware bottom sheet to enter a custody location code and move the parcel into custody. */
+function AssignCustodySheet({
+  parcel,
+  resources,
+  onClose,
+  onAssigned,
+}: {
+  parcel: Parcel | null;
+  resources: ResourceClients;
+  onClose: () => void;
+  onAssigned: (message: string) => void;
+}) {
+  const [locationCode, setLocationCode] = useState('');
+  useEffect(() => { if (parcel) setLocationCode(''); }, [parcel]);
+
+  const assign = useAsyncAction(async () => {
+    if (!parcel || locationCode.trim().length === 0) throw new Error('Missing fields');
+    const code = locationCode.trim();
+    const location = await resources.parcels.createCustodyLocation({ communityId: parcel.communityId, code });
+    await resources.parcels.assignCustodyLocation(parcel.id, location.id);
+    onAssigned(`Moved ${parcel.trackingNumber} into custody at ${code}.`);
+  });
+
+  return (
+    <BottomSheet
+      visible={parcel !== null}
+      title="Move into custody"
+      onClose={onClose}
+      footer={
+        <AppButton
+          title="Move into custody"
+          loading={assign.running}
+          disabled={locationCode.trim().length === 0}
+          onPress={() => assign.run()}
+          accessibilityHint="Hold this parcel in the entered custody location"
+        />
+      }
+    >
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+        {parcel ? (
+          <View style={styles.summary}>
+            <Text style={styles.summaryTitle} numberOfLines={1}>{parcel.trackingNumber}</Text>
+            <Text style={styles.summarySub} numberOfLines={1}>
+              {parcel.provider} · {humanizeCode(parcel.category)}{parcel.isPriority ? ' · Priority' : ''}
+            </Text>
+          </View>
+        ) : null}
+        <AppTextField
+          label="Custody location code"
+          required
+          value={locationCode}
+          onChangeText={setLocationCode}
+          placeholder="e.g. SHELF-A3 or LOCKER-12"
+          autoCapitalize="characters"
+          returnKeyType="done"
+          editable={!assign.running}
+          onSubmitEditing={() => locationCode.trim() && assign.run()}
+          {...(assign.error?.fieldErrors.code ? { error: assign.error.fieldErrors.code } : {})}
+        />
+        {assign.error && !assign.error.fieldErrors.code ? (
+          <FormBanner message={assign.error.message} tone="error" />
+        ) : null}
+      </ScrollView>
+    </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
   list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadow.soft,
+  },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
+  cardRight: { alignItems: 'flex-end', gap: theme.spacing.xs },
+
+  sheetScroll: { gap: theme.spacing.md, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm },
+  summary: {
+    backgroundColor: theme.color.background,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    gap: 2,
+  },
+  summaryTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  summarySub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
 });

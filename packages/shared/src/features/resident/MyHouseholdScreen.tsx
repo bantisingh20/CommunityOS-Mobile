@@ -8,12 +8,11 @@ import { EntityCard } from '../../ui/EntityCard';
 import { Badge } from '../../ui/Badge';
 import { useAsync } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
-import type { PagedData } from '../../models/envelope';
-import type { Resident, EmergencyContact } from '../../models/resident';
-import type { Unit } from '../../models/community';
+import type { EmergencyContact } from '../../models/resident';
 import type { ResourceClients } from '../../resources';
 import { verificationTone, humanizeCode } from '../shared/status';
 import { UnitDetailView } from '../shared/UnitDetailView';
+import { useMyResident } from './useMyResident';
 
 export interface MyHouseholdScreenProps {
   resources: ResourceClients;
@@ -35,17 +34,12 @@ function initialsOf(name: string): string {
  * Everything is self-scoped server-side (the API returns only the signed-in resident's own rows).
  */
 export function MyHouseholdScreen({ resources, onBack }: MyHouseholdScreenProps) {
-  const me = useAsync<PagedData<Resident>>(
-    (signal) => resources.residents.list({ pageSize: 5 }, {}, { signal }),
-    [],
-  );
-  const units = useAsync<PagedData<Unit>>(
-    (signal) => resources.units.list({ pageSize: 25 }, {}, { signal }),
-    [],
-  );
-
-  const resident = me.data?.items[0] ?? null;
-  const myUnits = units.data?.items ?? [];
+  // "Who am I" + my units in ONE self-targeted call (GET /residents/me). The resident is already
+  // matched by the token's user id server-side, so a non-resident principal (superadmin) gets a null
+  // resident and sees the empty state rather than a stranger's household.
+  const me = useMyResident(resources);
+  const resident = me.data?.resident ?? null;
+  const myUnits = me.data?.units ?? [];
 
   return (
     <FormScreen title="My household" subtitle="Your profile, contacts & units" {...(onBack ? { onBack } : {})}>
@@ -79,28 +73,33 @@ export function MyHouseholdScreen({ resources, onBack }: MyHouseholdScreenProps)
         ) : null}
       </AsyncBoundary>
 
-      {/* Units — the shared UnitDetailView renders its own hero + section cards per unit, so this is
-          a plain section header rather than another card wrapper (avoids a card-in-card look). */}
-      <View style={styles.sectionHeader}>
-        <View style={[styles.sectionIcon, { backgroundColor: `${theme.color.info}1f` }]}>
-          <Ionicons name="home" size={16} color={theme.color.info} />
-        </View>
-        <Text style={styles.sectionTitle}>My units</Text>
-        {myUnits.length > 0 ? <Text style={styles.sectionCount}>{myUnits.length}</Text> : null}
-      </View>
-      <AsyncBoundary
-        loading={units.loading}
-        error={units.error}
-        empty={!units.loading && myUnits.length === 0}
-        emptyMessage="No units are associated with your household yet."
-        onRetry={units.reload}
-      >
-        <View style={styles.units}>
-          {myUnits.map((u) => (
-            <UnitDetailView key={u.id} resources={resources} unitId={u.id} initialUnit={u} showHistory={false} />
-          ))}
-        </View>
-      </AsyncBoundary>
+      {/* Units — only for an actual resident principal (a non-resident's units.list() would return
+          the whole community, not "my units"). The shared UnitDetailView renders its own hero +
+          section cards per unit, so this is a plain section header (avoids a card-in-card look). */}
+      {resident ? (
+        <>
+          <View style={styles.sectionHeader}>
+            <View style={[styles.sectionIcon, { backgroundColor: `${theme.color.info}1f` }]}>
+              <Ionicons name="home" size={16} color={theme.color.info} />
+            </View>
+            <Text style={styles.sectionTitle}>My units</Text>
+            {myUnits.length > 0 ? <Text style={styles.sectionCount}>{myUnits.length}</Text> : null}
+          </View>
+          <AsyncBoundary
+            loading={me.loading}
+            error={me.error}
+            empty={!me.loading && myUnits.length === 0}
+            emptyMessage="No units are associated with your household yet."
+            onRetry={me.reload}
+          >
+            <View style={styles.units}>
+              {myUnits.map((u) => (
+                <UnitDetailView key={u.unitId} resources={resources} unitId={u.unitId} showHistory={false} />
+              ))}
+            </View>
+          </AsyncBoundary>
+        </>
+      ) : null}
     </FormScreen>
   );
 }

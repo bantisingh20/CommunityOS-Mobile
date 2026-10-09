@@ -17,6 +17,8 @@ export interface AppTextFieldProps
     | 'onBlur'
     | 'returnKeyType'
     | 'onSubmitEditing'
+    | 'multiline'
+    | 'numberOfLines'
   > {
   /** Visible label; also used as the accessibility label. Required for accessibility (Req 65.6). */
   label: string;
@@ -48,7 +50,8 @@ export function AppTextField({ label, required = false, error, testID, ...inputP
         accessibilityLabelledBy={labelId}
         accessibilityState={{ disabled: inputProps.editable === false }}
         placeholderTextColor={theme.color.mutedText}
-        style={[styles.input, hasError ? styles.inputError : null]}
+        textAlignVertical={inputProps.multiline ? 'top' : undefined}
+        style={[styles.input, inputProps.multiline ? styles.inputMultiline : null, hasError ? styles.inputError : null]}
       />
       {hasError ? (
         <Text style={styles.error} accessibilityLiveRegion="polite" accessibilityRole="alert">
@@ -73,5 +76,7 @@ const styles = StyleSheet.create({
     color: theme.color.text,
   },
   inputError: { borderColor: theme.color.danger },
+  // A roomier box for multi-line text (e.g. an announcement body); text starts at the top.
+  inputMultiline: { minHeight: 110, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm },
   error: { fontSize: theme.fontSize.label, color: theme.color.danger },
 });

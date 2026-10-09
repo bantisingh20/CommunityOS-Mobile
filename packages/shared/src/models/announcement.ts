@@ -14,4 +14,6 @@ export interface Announcement {
   /** Configurable category code (`Announcement_Category` list): general / event / maintenance / emergency / ... */
   readonly category: string;
   readonly publishedAtUtc: string;
+  /** Whether the notice is live on the resident board (admin can toggle). */
+  readonly isActive: boolean;
 }

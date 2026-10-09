@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
+import { FormSection } from '../../ui/FormSection';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { FormBanner } from '../../ui/FormBanner';
-import { LinkButton } from '../../ui/LinkButton';
 import { Select } from '../../ui/Select';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
 import { useAuth } from '../../auth/AuthContext';
@@ -26,11 +25,11 @@ export interface SosScreenProps {
 }
 
 /**
- * Guard SOS (Req 27.3, 27.4). Raise an emergency alert for a community — it notifies the responder
- * audience immediately — and acknowledge/resolve active alerts. The raising user is the signed-in
- * guard (the access token's `sub`, read from {@link useAuth}); no user id is hardcoded or typed in.
- * The target community is picked from the guard's authorized communities so the alert carries the
- * right `CommunityId`. An active alert stays active until someone acknowledges/resolves it (Req 27.4).
+ * Guard SOS (Req 27.3, 27.4) — redesigned to the shared card style. Raise an emergency alert for a
+ * community (notifies the responder audience immediately) and acknowledge/resolve active alerts. The
+ * raising user is the signed-in guard (the token's `sub`, from {@link useAuth}); no user id is
+ * hardcoded/typed. The target community is picked from the guard's authorized communities so the
+ * alert carries the right `CommunityId`. An active alert stays active until acked/resolved (Req 27.4).
  */
 export function SosScreen({ resources, onBack }: SosScreenProps) {
   const { userId } = useAuth();
@@ -68,16 +67,12 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
   });
 
   const acknowledge = useAsyncAction((id: string) => {
-    if (!userId) {
-      return Promise.reject(new Error('No user'));
-    }
+    if (!userId) return Promise.reject(new Error('No user'));
     return resources.securityOps.acknowledgeSos(id, userId);
   });
 
   const resolve = useAsyncAction((id: string) => {
-    if (!userId) {
-      return Promise.reject(new Error('No user'));
-    }
+    if (!userId) return Promise.reject(new Error('No user'));
     return resources.securityOps.resolveSos(id, userId);
   });
 
@@ -85,50 +80,47 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
   const activeItems = active.data?.items ?? [];
 
   return (
-    <Screen accessibilityLabel="SOS">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the gate menu" /> : null}
-      <SectionHeading title="SOS" level={1} />
-
+    <FormScreen title="SOS" subtitle="Raise or manage an emergency alert" {...(onBack ? { onBack } : {})}>
       {!userId ? (
         <FormBanner message="Your session is missing a user id; please sign in again to raise an SOS." tone="error" />
       ) : null}
 
-      <SectionHeading title="Raise an alert" />
-      {communityOptions.length > 1 ? (
-        <Select
-          label="Community"
-          value={community}
-          options={communityOptions}
-          onChange={setCommunity}
-          placeholder="Select the community"
+      <FormSection title="Raise an alert" subtitle="Notifies responders immediately" icon="warning" tint={theme.color.danger}>
+        {communityOptions.length > 1 ? (
+          <Select
+            label="Community"
+            value={community}
+            options={communityOptions}
+            onChange={setCommunity}
+            placeholder="Select the community"
+          />
+        ) : null}
+        <AppTextField
+          label="Location (optional)"
+          value={location}
+          onChangeText={setLocation}
+          placeholder="e.g. Main gate, Tower B lobby"
         />
-      ) : null}
-      <AppTextField
-        label="Location (optional)"
-        value={location}
-        onChangeText={setLocation}
-        placeholder="e.g. Main gate, Tower B lobby"
-      />
+        {raise.error ? <FormBanner message={raise.error.message} tone="error" /> : null}
+        {notice ? <FormBanner message={notice} tone="success" /> : null}
+        <AppButton
+          title="Raise SOS"
+          variant="danger"
+          loading={raise.running}
+          disabled={!community || !userId}
+          onPress={async () => {
+            setNotice(null);
+            if (await raise.run()) {
+              setNotice('SOS raised. Responders have been notified.');
+              setLocation('');
+              active.reload();
+            }
+          }}
+          accessibilityHint="Raise an emergency SOS alert for this community"
+        />
+      </FormSection>
 
-      {raise.error ? <FormBanner message={raise.error.message} tone="error" /> : null}
-      {notice ? <FormBanner message={notice} tone="success" /> : null}
-
-      <AppButton
-        title="Raise SOS"
-        loading={raise.running}
-        disabled={!community || !userId}
-        onPress={async () => {
-          setNotice(null);
-          if (await raise.run()) {
-            setNotice('SOS raised. Responders have been notified.');
-            setLocation('');
-            active.reload();
-          }
-        }}
-        accessibilityHint="Raise an emergency SOS alert for this community"
-      />
-
-      <SectionHeading title="Active alerts" />
+      <Text style={styles.sectionLabel}>ACTIVE ALERTS</Text>
       {acknowledge.error ? <FormBanner message={acknowledge.error.message} tone="error" /> : null}
       {resolve.error ? <FormBanner message={resolve.error.message} tone="error" /> : null}
       <AsyncBoundary
@@ -141,11 +133,16 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
         <View style={styles.list}>
           {activeItems.map((a) => (
             <View key={a.id} style={styles.card}>
-              <ListRow
-                title={a.location ?? 'SOS alert'}
-                subtitle={`Raised ${formatTime(a.raisedAtUtc)}`}
-                trailing={<Badge label={humanizeCode(a.status)} tone={gateStatusTone(a.status)} />}
-              />
+              <View style={styles.cardTop}>
+                <View style={[styles.iconTile, { backgroundColor: `${theme.color.danger}1f` }]}>
+                  <Ionicons name="warning" size={22} color={theme.color.danger} />
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={styles.cardTitle} numberOfLines={1}>{a.location ?? 'SOS alert'}</Text>
+                  <Text style={styles.cardSub} numberOfLines={1}>Raised {formatTime(a.raisedAtUtc)}</Text>
+                </View>
+                <Badge label={humanizeCode(a.status)} tone={gateStatusTone(a.status)} />
+              </View>
               <View style={styles.row}>
                 <View style={styles.flex}>
                   <AppButton
@@ -154,9 +151,7 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
                     disabled={!userId || a.status !== SosAlertStatus.Active}
                     loading={acknowledge.running}
                     onPress={async () => {
-                      if (await acknowledge.run(a.id)) {
-                        active.reload();
-                      }
+                      if (await acknowledge.run(a.id)) active.reload();
                     }}
                     accessibilityHint="Acknowledge this SOS alert"
                   />
@@ -167,9 +162,7 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
                     disabled={!userId}
                     loading={resolve.running}
                     onPress={async () => {
-                      if (await resolve.run(a.id)) {
-                        active.reload();
-                      }
+                      if (await resolve.run(a.id)) active.reload();
                     }}
                     accessibilityHint="Resolve this SOS alert"
                   />
@@ -179,7 +172,7 @@ export function SosScreen({ resources, onBack }: SosScreenProps) {
           ))}
         </View>
       </AsyncBoundary>
-    </Screen>
+    </FormScreen>
   );
 }
 
@@ -191,8 +184,20 @@ function formatTime(iso: string): string {
 }
 
 const styles = StyleSheet.create({
+  sectionLabel: { fontSize: theme.fontSize.caption, fontWeight: '800', color: theme.color.mutedText, letterSpacing: 0.5, marginTop: theme.spacing.sm },
   list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
-  card: { gap: theme.spacing.xs },
+  card: {
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.shadow.soft,
+  },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
   row: { flexDirection: 'row', gap: theme.spacing.sm },
   flex: { flex: 1 },
 });

@@ -18,6 +18,13 @@ export interface PhotoPickerProps {
   /** Called with the new stored file reference after a successful upload, or null when removed. */
   onChange: (fileId: string | null) => void;
   disabled?: boolean;
+  /**
+   * Deferred mode. When provided, the picked image is NOT uploaded here — the local file is reported
+   * through this callback (null when removed) and the caller uploads it later, once it knows the
+   * owning record id (e.g. create the resident first, then upload bound to its id). In this mode
+   * {@link upload} is unused and {@link onChange} is not called by the picker.
+   */
+  onPickLocal?: (file: LocalFile | null) => void;
 }
 
 /**
@@ -30,9 +37,10 @@ export interface PhotoPickerProps {
  * <p>`expo-image-picker` is a native module provided by the host app, imported dynamically so the
  * shared package carries no hard dependency on it (same decoupling as the secure-store adapter).</p>
  */
-export function PhotoPicker({ label, required = false, files, upload, value, onChange, disabled = false }: PhotoPickerProps) {
+export function PhotoPicker({ label, required = false, files, upload, value, onChange, disabled = false, onPickLocal }: PhotoPickerProps) {
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const deferred = typeof onPickLocal === 'function';
 
   const pickFrom = async (source: 'camera' | 'library') => {
     if (disabled || busy) return;
@@ -65,11 +73,17 @@ export function PhotoPicker({ label, required = false, files, upload, value, onC
         mimeType: asset.mimeType ?? 'image/jpeg',
       };
 
-      setBusy(true);
       setPreviewUri(asset.uri);
+      if (deferred) {
+        // Deferred: hand the local file to the caller; they upload it after the owning record exists.
+        onPickLocal!(local);
+        emitToast({ tone: 'success', title: 'Photo selected', message: 'It will be saved when you submit.' });
+        return;
+      }
+      setBusy(true);
       const stored = await files.upload(local, upload);
       onChange(stored.reference);
-      emitToast({ tone: 'success', title: 'Photo added', message: 'The visitor photo was uploaded.' });
+      emitToast({ tone: 'success', title: 'Photo added', message: 'The photo was uploaded.' });
     } catch (err) {
       setPreviewUri(null);
       const message = err instanceof Error ? err.message : 'Could not add the photo.';
@@ -82,10 +96,15 @@ export function PhotoPicker({ label, required = false, files, upload, value, onC
   const remove = () => {
     if (disabled || busy) return;
     setPreviewUri(null);
-    onChange(null);
+    if (deferred) onPickLocal!(null);
+    else onChange(null);
   };
 
-  const hasPhoto = Boolean(value) || Boolean(previewUri);
+  // Thumbnail source: a freshly-picked LOCAL image takes priority; otherwise fall back to an
+  // already-stored photo (`value` = file id) resolved to an authorized download URL + bearer header.
+  // The stored fallback is what makes an existing photo show in EDIT mode (not just after a pick).
+  const thumbSource = previewUri ? { uri: previewUri } : files.downloadSource(value);
+  const hasPhoto = Boolean(thumbSource);
 
   return (
     <View style={styles.container}>
@@ -95,8 +114,8 @@ export function PhotoPicker({ label, required = false, files, upload, value, onC
       </Text>
 
       <View style={styles.row}>
-        {hasPhoto && previewUri ? (
-          <Image source={{ uri: previewUri }} style={styles.thumb} accessibilityLabel="Selected photo preview" />
+        {thumbSource ? (
+          <Image source={thumbSource} style={styles.thumb} accessibilityLabel="Selected photo preview" />
         ) : (
           <View style={[styles.thumb, styles.thumbEmpty]}>
             {busy ? <ActivityIndicator color={theme.color.primary} /> : <Ionicons name="image-outline" size={24} color={theme.color.mutedText} />}

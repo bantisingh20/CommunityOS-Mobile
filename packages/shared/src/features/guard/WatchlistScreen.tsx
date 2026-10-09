@@ -1,17 +1,17 @@
-import React, { useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import React, { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
+import { BottomSheet } from '../../ui/BottomSheet';
 import { Pager } from '../../ui/Pager';
-import { FormBanner } from '../../ui/FormBanner';
-import { LinkButton } from '../../ui/LinkButton';
+import { Select, type SelectOption } from '../../ui/Select';
 import { MasterDataDropdown } from '../../ui/MasterDataDropdown';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
+import { emitToast } from '../../ui/toastBus';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
 import { GateMasterDataKeys, WatchlistStatus } from '../../models/gate';
@@ -27,15 +27,14 @@ export interface WatchlistScreenProps {
 }
 
 /**
- * Guard watchlist (Req 26.1, 26.3, 26.5). Surfaces the community's flagged subjects (View-gated) and
- * lets an authorized guard add an entry or clear an active one. A flagged subject is what the gate
- * matches at entry; admitting one then needs an Approve override (enforced server-side). Subject
- * type and severity options come from the configurable master-data lists (`Watchlist_Subject_Type`,
- * `Watchlist_Severity`), never hardcoded. The target community is chosen from the guard's authorized
- * communities so the correct `CommunityId` is stamped on an added entry (Req 26.1).
+ * Guard watchlist (Req 26.1, 26.3, 26.5) — redesigned to the shared card + bottom-sheet pattern. The
+ * community's active flagged subjects (View-gated) render as **product-row cards** (alert tile +
+ * identifier + "type · reason" + severity badge + a Clear action); the header **"+"** opens a
+ * **keyboard-aware bottom sheet** to add an entry. A flagged subject is what the gate matches at
+ * entry; admitting one then needs an Approve override (enforced server-side). Subject type/severity
+ * options come from master-data (`Watchlist_Subject_Type`, `Watchlist_Severity`), never hardcoded.
  */
 export function WatchlistScreen({ resources, onBack }: WatchlistScreenProps) {
-  const [community, setCommunity] = useState<Community | null>(null);
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
 
@@ -52,46 +51,54 @@ export function WatchlistScreen({ resources, onBack }: WatchlistScreenProps) {
   const clear = useAsyncAction((id: string) => resources.securityOps.clearWatchlistEntry(id));
 
   const items = list.data?.items ?? [];
+  const total = list.data?.totalCount ?? 0;
 
   return (
-    <Screen accessibilityLabel="Watchlist">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the gate menu" /> : null}
-      <SectionHeading
-        title="Watchlist"
-        level={1}
-        trailing={
-          <AppButton title="Add" onPress={() => setAdding(true)} accessibilityHint="Add a watchlist entry" />
-        }
-      />
-
-      {clear.error ? <FormBanner message={clear.error.message} tone="error" /> : null}
-
+    <FormScreen
+      title="Watchlist"
+      subtitle={total ? `${total} active ${total === 1 ? 'flag' : 'flags'}` : 'Flagged people & vehicles'}
+      {...(onBack ? { onBack } : {})}
+      headerRight={
+        <Pressable onPress={() => setAdding(true)} accessibilityRole="button" accessibilityLabel="Add watchlist entry" hitSlop={8}>
+          <Ionicons name="add" size={26} color={theme.color.primaryText} />
+        </Pressable>
+      }
+    >
       <AsyncBoundary
         loading={list.loading}
         error={list.error}
         empty={!list.loading && items.length === 0}
-        emptyMessage="No active watchlist entries."
+        emptyMessage="No active watchlist entries. Tap + to flag a person or vehicle."
         onRetry={list.reload}
       >
         <View style={styles.list}>
           {items.map((e) => (
             <View key={e.id} style={styles.card}>
-              <ListRow
-                title={e.subjectIdentifier}
-                subtitle={`${humanizeCode(e.subjectType)} · ${e.reason}`}
-                trailing={<Badge label={humanizeCode(e.severity)} tone={watchlistTone(e.status)} />}
-              />
-              <AppButton
-                title="Clear"
-                variant="secondary"
-                loading={clear.running}
-                onPress={async () => {
-                  if (await clear.run(e.id)) {
-                    list.reload();
-                  }
-                }}
-                accessibilityHint={`Clear the watchlist entry for ${e.subjectIdentifier}`}
-              />
+              <View style={[styles.iconTile, { backgroundColor: `${theme.color.danger}1f` }]}>
+                <Ionicons name="alert-circle" size={22} color={theme.color.danger} />
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle} numberOfLines={1}>{e.subjectIdentifier}</Text>
+                <Text style={styles.cardSub} numberOfLines={2}>
+                  {humanizeCode(e.subjectType)} · {e.reason}
+                </Text>
+              </View>
+              <View style={styles.cardRight}>
+                <Badge label={humanizeCode(e.severity)} tone={watchlistTone(e.status)} />
+                <Pressable
+                  onPress={async () => {
+                    if (await clear.run(e.id)) list.reload();
+                  }}
+                  disabled={clear.running}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Clear the flag for ${e.subjectIdentifier}`}
+                  hitSlop={8}
+                  style={styles.clearBtn}
+                >
+                  <Ionicons name="checkmark-done" size={18} color={theme.color.success} />
+                  <Text style={styles.clearText}>Clear</Text>
+                </Pressable>
+              </View>
             </View>
           ))}
         </View>
@@ -106,11 +113,9 @@ export function WatchlistScreen({ resources, onBack }: WatchlistScreenProps) {
         ) : null}
       </AsyncBoundary>
 
-      <AddWatchlistModal
+      <AddWatchlistSheet
         visible={adding}
         resources={resources}
-        community={community}
-        onPickCommunity={setCommunity}
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
@@ -118,41 +123,54 @@ export function WatchlistScreen({ resources, onBack }: WatchlistScreenProps) {
           list.reload();
         }}
       />
-    </Screen>
+    </FormScreen>
   );
 }
 
-function AddWatchlistModal({
+/**
+ * Keyboard-aware bottom-sheet to add a watchlist entry: community (when the guard spans several),
+ * subject type, identifier, severity, reason. Mirrors the admin sheet pattern — lift the whole sheet
+ * by the keyboard height, bounded inner ScrollView, pinned submit button.
+ */
+function AddWatchlistSheet({
   visible,
   resources,
-  community,
-  onPickCommunity,
   onClose,
   onAdded,
 }: {
   visible: boolean;
   resources: ResourceClients;
-  community: Community | null;
-  onPickCommunity: (c: Community) => void;
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const communities = useAsync<PagedData<Community>>(
+    (signal) => resources.communities.list({ pageSize: 100 }, {}, { signal }),
+    [],
+  );
+  const options: SelectOption[] = (communities.data?.items ?? []).map((c) => ({ value: c.id, label: c.name }));
+  const sole = options.length === 1 ? options[0]!.value : null;
+
+  const [communityId, setCommunityId] = useState<string | null>(null);
   const [subjectType, setSubjectType] = useState<string | null>(null);
   const [severity, setSeverity] = useState<string | null>(null);
   const [identifier, setIdentifier] = useState('');
   const [reason, setReason] = useState('');
 
-  const communities = useAsync<PagedData<Community>>(
-    (signal) => resources.communities.list({ pageSize: 50 }, {}, { signal }),
-    [],
-  );
+  // Reset whenever the sheet opens.
+  useEffect(() => {
+    if (visible) {
+      setCommunityId(null); setSubjectType(null); setSeverity(null); setIdentifier(''); setReason('');
+    }
+  }, [visible]);
+
+  const effectiveCommunityId = communityId ?? sole;
 
   const add = useAsyncAction(() => {
-    if (!community || !subjectType || !severity) {
+    if (!effectiveCommunityId || !subjectType || !severity) {
       return Promise.reject(new Error('Missing fields'));
     }
     return resources.securityOps.addWatchlistEntry({
-      communityId: community.id,
+      communityId: effectiveCommunityId,
       subjectType,
       severity,
       subjectIdentifier: identifier.trim(),
@@ -161,116 +179,96 @@ function AddWatchlistModal({
   });
 
   const canSubmit =
-    Boolean(community) && Boolean(subjectType) && Boolean(severity) && identifier.trim().length > 0 && reason.trim().length > 0;
+    Boolean(effectiveCommunityId) && Boolean(subjectType) && Boolean(severity) &&
+    identifier.trim().length > 0 && reason.trim().length > 0;
+
+  const onSubmit = () => {
+    if (!canSubmit) {
+      emitToast({ tone: 'error', title: 'Check the form', message: 'Fill community, type, identifier, severity and reason.' });
+      return;
+    }
+    void add.run().then((ok) => { if (ok) onAdded(); });
+  };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} accessibilityLabel="Close" onPress={onClose}>
-        <Pressable style={styles.sheet} accessibilityViewIsModal>
-          <SectionHeading title="Add watchlist entry" />
-
-          {communities.data && communities.data.items.length > 1 ? (
-            <View style={styles.communityRow}>
-              {communities.data.items.map((c) => (
-                <AppButton
-                  key={c.id}
-                  title={c.name}
-                  variant={community?.id === c.id ? 'primary' : 'secondary'}
-                  onPress={() => onPickCommunity(c)}
-                  accessibilityHint={`Target community ${c.name}`}
-                />
-              ))}
-            </View>
-          ) : null}
-          {communities.data && communities.data.items.length === 1 && !community ? (
-            <SelectSoleCommunity items={communities.data.items} onPick={onPickCommunity} />
-          ) : null}
-
-          <MasterDataDropdown
-            label="Subject type"
-            listKey={GateMasterDataKeys.WatchlistSubjectType}
-            masterData={resources.masterData}
-            value={subjectType}
-            onChange={setSubjectType}
-            placeholder="Person or vehicle"
-            {...(community ? { communityId: community.id } : {})}
-          />
-          <AppTextField
-            label="Subject identifier"
-            value={identifier}
-            onChangeText={setIdentifier}
-            placeholder="Name / phone / vehicle number"
-            autoCapitalize="characters"
-            {...(add.error?.fieldErrors.subjectIdentifier ? { error: add.error.fieldErrors.subjectIdentifier } : {})}
-          />
-          <MasterDataDropdown
-            label="Severity"
-            listKey={GateMasterDataKeys.WatchlistSeverity}
-            masterData={resources.masterData}
-            value={severity}
-            onChange={setSeverity}
-            placeholder="Select severity"
-            {...(community ? { communityId: community.id } : {})}
-          />
-          <AppTextField
-            label="Reason"
-            value={reason}
-            onChangeText={setReason}
-            placeholder="Why is this subject watchlisted?"
-            {...(add.error?.fieldErrors.reason ? { error: add.error.fieldErrors.reason } : {})}
-          />
-
-          {add.error && !add.error.fieldErrors.subjectIdentifier && !add.error.fieldErrors.reason ? (
-            <FormBanner message={add.error.message} tone="error" />
-          ) : null}
-
-          <View style={styles.row}>
-            <View style={styles.flex}>
-              <AppButton title="Cancel" variant="secondary" disabled={add.running} onPress={onClose} />
-            </View>
-            <View style={styles.flex}>
-              <AppButton
-                title="Add"
-                loading={add.running}
-                disabled={!canSubmit}
-                onPress={async () => {
-                  if (await add.run()) {
-                    onAdded();
-                  }
-                }}
-              />
-            </View>
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <BottomSheet
+      visible={visible}
+      title="Add to watchlist"
+      onClose={onClose}
+      footer={
+        <AppButton
+          title="Add to watchlist"
+          loading={add.running}
+          disabled={!canSubmit}
+          onPress={onSubmit}
+          accessibilityHint="Flag this subject at the gate"
+        />
+      }
+    >
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+        {options.length > 1 ? (
+          <Select label="Community" required value={effectiveCommunityId} options={options} onChange={setCommunityId} placeholder="Choose a community" />
+        ) : null}
+        <MasterDataDropdown
+          label="Subject type"
+          listKey={GateMasterDataKeys.WatchlistSubjectType}
+          masterData={resources.masterData}
+          value={subjectType}
+          onChange={setSubjectType}
+          placeholder="Person or vehicle"
+          {...(effectiveCommunityId ? { communityId: effectiveCommunityId } : {})}
+        />
+        <AppTextField
+          label="Subject identifier"
+          required
+          value={identifier}
+          onChangeText={setIdentifier}
+          placeholder="Name / phone / vehicle number"
+          autoCapitalize="characters"
+          editable={!add.running}
+          {...(add.error?.fieldErrors.subjectIdentifier ? { error: add.error.fieldErrors.subjectIdentifier } : {})}
+        />
+        <MasterDataDropdown
+          label="Severity"
+          listKey={GateMasterDataKeys.WatchlistSeverity}
+          masterData={resources.masterData}
+          value={severity}
+          onChange={setSeverity}
+          placeholder="Select severity"
+          {...(effectiveCommunityId ? { communityId: effectiveCommunityId } : {})}
+        />
+        <AppTextField
+          label="Reason"
+          required
+          value={reason}
+          onChangeText={setReason}
+          placeholder="Why is this subject watchlisted?"
+          editable={!add.running}
+          {...(add.error?.fieldErrors.reason ? { error: add.error.fieldErrors.reason } : {})}
+        />
+      </ScrollView>
+    </BottomSheet>
   );
-}
-
-/** When the guard is scoped to a single community, select it automatically so the form is ready. */
-function SelectSoleCommunity({ items, onPick }: { items: Community[]; onPick: (c: Community) => void }) {
-  const sole = items[0];
-  React.useEffect(() => {
-    if (sole) {
-      onPick(sole);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sole?.id]);
-  return null;
 }
 
 const styles = StyleSheet.create({
   list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
-  card: { gap: theme.spacing.xs },
-  row: { flexDirection: 'row', gap: theme.spacing.sm },
-  flex: { flex: 1 },
-  communityRow: { gap: theme.spacing.sm },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: theme.spacing.lg },
-  sheet: {
-    backgroundColor: theme.color.background,
-    borderRadius: theme.radius.md,
-    padding: theme.spacing.lg,
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
     gap: theme.spacing.md,
-    maxHeight: '90%',
+    ...theme.shadow.soft,
   },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
+  cardRight: { alignItems: 'flex-end', gap: theme.spacing.xs },
+  clearBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 4 },
+  clearText: { color: theme.color.success, fontWeight: '700', fontSize: theme.fontSize.caption },
+
+  sheetScroll: { gap: theme.spacing.md, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm },
 });

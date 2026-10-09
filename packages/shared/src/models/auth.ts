@@ -14,12 +14,14 @@ export interface LoginRequest {
   readonly platform?: string;
 }
 
-/** `POST /auth/login` success data: token + roles only (never any secret). */
+/** `POST /auth/login` and `/auth/refresh` success data: access token + roles + the refresh token. */
 export interface LoginResponse {
   readonly accessToken: string;
   /** ISO-8601 UTC expiry (serialized `DateTime`). */
   readonly expiresAtUtc: string;
   readonly roles: string[];
+  /** Opaque one-time-use refresh token for silent re-auth; stored securely, swapped at `/auth/refresh`. */
+  readonly refreshToken: string;
 }
 
 /** `POST /auth/password/forgot` body. */

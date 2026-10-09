@@ -17,7 +17,11 @@ const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
  * language. Field-level reasons (from the envelope `fieldErrors`) are still shown under inputs.
  */
 const FRIENDLY_BY_CODE: Partial<Record<ErrorCode, string>> = {
-  UNAUTHENTICATED: 'The email/phone or password is incorrect. Please try again.',
+  // Neutral, context-free message: UNAUTHENTICATED happens both on a bad login AND when a session
+  // ends mid-use (token expired / revoked elsewhere). The login screen overrides this with a
+  // credential-specific message for its OWN failed sign-in; everywhere else "session ended" is
+  // correct — never claim wrong credentials on an in-app screen.
+  UNAUTHENTICATED: 'Your session has ended. Please sign in again.',
   FORBIDDEN: "You don't have permission to do that.",
   NOT_FOUND: "We couldn't find what you were looking for.",
   CONFLICT: 'That action conflicts with the current state. Please refresh and try again.',

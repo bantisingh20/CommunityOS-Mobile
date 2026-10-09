@@ -34,6 +34,12 @@ const config: ExpoConfig = {
         cameraPermission: 'Allow $(PRODUCT_NAME) to take a visitor photo.',
       },
     ],
+    [
+      'expo-camera',
+      {
+        cameraPermission: 'Allow $(PRODUCT_NAME) to scan a visitor pass QR code at the gate.',
+      },
+    ],
   ],
 };
 

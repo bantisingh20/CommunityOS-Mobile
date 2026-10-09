@@ -37,6 +37,26 @@ export interface CreateUnitBody {
 }
 
 /**
+ * Editable unit fields (mirror of backend UpdateUnitBody, Req 14.x). The `update*` flags distinguish
+ * "apply this (possibly null) value" from "leave unchanged", matching the backend contract. Only
+ * send what changes.
+ */
+export interface UpdateUnitBody {
+  readonly hierarchyNodeId?: string | null;
+  readonly updateHierarchyNode?: boolean;
+  readonly unitNumber?: string;
+  readonly unitType?: string;
+  readonly area?: number | null;
+  readonly updateArea?: boolean;
+  readonly floor?: string | null;
+  readonly updateFloor?: boolean;
+  readonly bedrooms?: number | null;
+  readonly updateBedrooms?: boolean;
+  readonly unitStatus?: string;
+  readonly customAttributes?: Record<string, string>;
+}
+
+/**
  * Typed client for `/api/v1/units` and its per-unit asset/history reads (Req 14.x, 16.4, 19.5).
  * Thin, envelope-aware wrapper over {@link ApiClient}. The list is tenant-scoped server-side; the
  * per-unit vehicle/pet reads are additionally resident self-scoped, so a resident principal only
@@ -67,6 +87,16 @@ export class UnitsClient {
   /** Create a unit (flat). Requires Create on Unit; a duplicate number in the community → conflict (Req 14.1). */
   create(body: CreateUnitBody): Promise<Unit> {
     return this.api.post<Unit>('/api/v1/units', { body });
+  }
+
+  /** Edit a unit (Req 14.x). Requires Edit on Unit; a duplicate number / concurrency → CONFLICT. */
+  update(id: string, body: UpdateUnitBody): Promise<Unit> {
+    return this.api.put<Unit>(`/api/v1/units/${id}`, { body });
+  }
+
+  /** Soft-delete a unit (Req 14.6). Requires Delete on Unit; retained + traceable. */
+  delete(id: string): Promise<unknown> {
+    return this.api.delete<unknown>(`/api/v1/units/${id}`);
   }
 
   /** A unit's registered vehicles (Req 19.1, 19.5). */

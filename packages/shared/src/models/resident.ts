@@ -30,6 +30,35 @@ export interface Resident {
   /** Reason recorded on rejection, else null (Req 17.3). */
   readonly rejectionReason: string | null;
   readonly isArchived: boolean;
+  /** Optional File_Service reference to the resident's photo, else null. Never mandatory. */
+  readonly photoFileId: string | null;
+}
+
+/**
+ * Mirror of `ResidentHouseholdUnitDto` — one of the signed-in resident's OWN active unit
+ * memberships (the unit they belong to + their relationship). Returned by
+ * `GET /residents/{id}/household`; used to resolve a resident's own unit(s) instead of listing the
+ * whole community.
+ */
+export interface ResidentHouseholdUnit {
+  readonly unitId: string;
+  readonly unitNumber: string;
+  readonly unitType: string;
+  readonly unitStatus: string;
+  readonly floor: string | null;
+  readonly communityId: string;
+  readonly relationship: string;
+  readonly startDate: string;
+}
+
+/**
+ * Mirror of `ResidentMeDto` — the SIGNED-IN principal's own resident row + their own active unit
+ * memberships, from `GET /api/v1/residents/me`. `resident` is null when the principal has no linked
+ * resident row (e.g. a platform superadmin), so callers fall back to the login identifier.
+ */
+export interface ResidentMe {
+  readonly resident: Resident | null;
+  readonly units: ResidentHouseholdUnit[];
 }
 
 /** Mirror of `EmergencyContactDto` (Req 15.3). */

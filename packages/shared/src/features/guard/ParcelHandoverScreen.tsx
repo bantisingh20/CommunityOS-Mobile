@@ -1,15 +1,15 @@
 import React, { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Screen } from '../../ui/Screen';
-import { SectionHeading } from '../../ui/SectionHeading';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { FormScreen } from '../../ui/FormScreen';
+import { FormSection } from '../../ui/FormSection';
 import { AppTextField } from '../../ui/AppTextField';
 import { AppButton } from '../../ui/AppButton';
 import { AsyncBoundary } from '../../ui/AsyncBoundary';
-import { ListRow } from '../../ui/ListRow';
 import { Badge } from '../../ui/Badge';
 import { Pager } from '../../ui/Pager';
 import { FormBanner } from '../../ui/FormBanner';
-import { LinkButton } from '../../ui/LinkButton';
+import { PhotoPicker } from '../../ui/PhotoPicker';
 import { useAsync, useAsyncAction } from '../../ui/hooks';
 import { theme } from '../../ui/theme';
 import { DEFAULT_PAGE_SIZE } from '../../models/query';
@@ -30,20 +30,18 @@ export interface ParcelHandoverScreenProps {
 type DetailMode = 'handover' | 'lostDamaged' | 'returned';
 
 /**
- * Guard verified handover + custody outcomes (Req 30.2–30.5, 31.3, 31.4). Lists parcels that can be
- * handed over (in custody / ready for pickup); for a chosen parcel the guard either performs a
- * verified handover (entering the resident's authorization id plus whatever the collector presents —
- * OTP, QR token and/or ID reference) or records the parcel as lost/damaged (raising a linked
- * incident, Req 31.3) or returned to the provider (Req 31.4). The backend verifies the collector
- * against the authorization's configured method; a failed verification leaves the parcel unchanged
- * (Req 30.3).
+ * Guard verified handover + custody outcomes (Req 30.2–30.5, 31.3, 31.4) — redesigned to the shared
+ * card style. Parcels ready to hand over (in custody / ready for pickup) list as **product-row
+ * cards**; tapping one opens a detail with a parcel summary card and a pill segmented control for the
+ * three actions: a verified handover (authorization id + whatever the collector presents — OTP, QR
+ * token and/or ID reference), record lost/damaged (raises a linked incident, Req 31.3), or returned
+ * to the provider (Req 31.4). The backend verifies the collector against the authorization's method;
+ * a failed verification leaves the parcel unchanged (Req 30.3).
  *
- * <p><b>Connectivity-REQUIRED (Req 30.5).</b> Unlike the gate exit capture, a handover is NEVER
- * queued offline — a verified custody transfer must happen online. The screen makes that explicit
- * and, on a transport failure, tells the guard to retry when back online. It carries a STABLE
- * `Idempotency-Key` for the attempt (generated once when the parcel is selected and held in a ref),
- * so a retry after a flaky response performs the handover at most once and replays the first result
- * rather than handing the same parcel over twice.</p>
+ * <p><b>Connectivity-REQUIRED (Req 30.5).</b> A handover is NEVER queued offline. On a transport
+ * failure the screen says "reconnect and retry". It carries a STABLE `Idempotency-Key` per attempt
+ * (generated once when the parcel is selected, held in a ref), so a retry hands the parcel over at
+ * most once and replays the first result.</p>
  */
 export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreenProps) {
   const [page, setPage] = useState(1);
@@ -53,9 +51,9 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
   const [otp, setOtp] = useState('');
   const [qrToken, setQrToken] = useState('');
   const [idReference, setIdReference] = useState('');
-  const [proofFileId, setProofFileId] = useState('');
+  const [proofFileId, setProofFileId] = useState<string | null>(null);
   const [circumstances, setCircumstances] = useState('');
-  const [evidenceFileId, setEvidenceFileId] = useState('');
+  const [evidenceFileId, setEvidenceFileId] = useState<string | null>(null);
   const [returnReason, setReturnReason] = useState('');
   const [done, setDone] = useState<ParcelHandover | null>(null);
   const [outcomeNotice, setOutcomeNotice] = useState<string | null>(null);
@@ -78,7 +76,7 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
       ...(otp.trim() ? { otp: otp.trim() } : {}),
       ...(qrToken.trim() ? { qrToken: qrToken.trim() } : {}),
       ...(idReference.trim() ? { presentedIdReference: idReference.trim() } : {}),
-      ...(proofFileId.trim() ? { proofFileId: proofFileId.trim() } : {}),
+      ...(proofFileId ? { proofFileId } : {}),
     };
     setOffline(false);
     try {
@@ -102,7 +100,7 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
     }
     await resources.parcels.recordLostDamaged(selected.id, {
       circumstances: circumstances.trim(),
-      ...(evidenceFileId.trim() ? { evidenceFileId: evidenceFileId.trim() } : {}),
+      ...(evidenceFileId ? { evidenceFileId } : {}),
     });
     setOutcomeNotice(`Recorded ${selected.trackingNumber} as lost / damaged and raised a linked incident.`);
     reload();
@@ -128,9 +126,9 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
     setOtp('');
     setQrToken('');
     setIdReference('');
-    setProofFileId('');
+    setProofFileId(null);
     setCircumstances('');
-    setEvidenceFileId('');
+    setEvidenceFileId(null);
     setReturnReason('');
     setDone(null);
     setOutcomeNotice(null);
@@ -158,16 +156,19 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
 
   if (selected) {
     const finished = done || outcomeNotice;
+    const photoUpload = { owningResourceType: 'Parcel', communityId: selected.communityId, owningResourceId: selected.id };
     return (
-      <Screen accessibilityLabel="Perform handover">
-        <LinkButton title="‹ Back" onPress={closeParcel} accessibilityHint="Return to the handover list" />
-        <SectionHeading title="Verified handover" level={1} />
-
-        <ListRow
-          title={selected.trackingNumber}
-          subtitle={`${selected.provider} · ${humanizeCode(selected.category)}`}
-          trailing={<Badge label={humanizeCode(selected.status)} tone={parcelStatusTone(selected.status)} />}
-        />
+      <FormScreen title="Verified handover" subtitle="Release a parcel to a resident" onBack={closeParcel}>
+        <View style={styles.summaryCard}>
+          <View style={[styles.iconTile, { backgroundColor: '#1f6feb1f' }]}>
+            <Ionicons name="cube" size={22} color="#1f6feb" />
+          </View>
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle} numberOfLines={1}>{selected.trackingNumber}</Text>
+            <Text style={styles.cardSub} numberOfLines={1}>{selected.provider} · {humanizeCode(selected.category)}</Text>
+          </View>
+          <Badge label={humanizeCode(selected.status)} tone={parcelStatusTone(selected.status)} />
+        </View>
 
         {finished ? (
           <>
@@ -184,40 +185,16 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
         ) : (
           <>
             <View style={styles.segment} accessibilityRole="tablist">
-              <View style={styles.flex}>
-                <AppButton
-                  title="Hand over"
-                  variant={mode === 'handover' ? 'primary' : 'secondary'}
-                  onPress={() => switchMode('handover')}
-                  accessibilityHint="Perform a verified handover"
-                />
-              </View>
-              <View style={styles.flex}>
-                <AppButton
-                  title="Lost / damaged"
-                  variant={mode === 'lostDamaged' ? 'primary' : 'secondary'}
-                  onPress={() => switchMode('lostDamaged')}
-                  accessibilityHint="Record this parcel as lost or damaged"
-                />
-              </View>
-              <View style={styles.flex}>
-                <AppButton
-                  title="Returned"
-                  variant={mode === 'returned' ? 'primary' : 'secondary'}
-                  onPress={() => switchMode('returned')}
-                  accessibilityHint="Record this parcel as returned to the provider"
-                />
-              </View>
+              <SegTab label="Hand over" active={mode === 'handover'} onPress={() => switchMode('handover')} />
+              <SegTab label="Lost / damaged" active={mode === 'lostDamaged'} onPress={() => switchMode('lostDamaged')} />
+              <SegTab label="Returned" active={mode === 'returned'} onPress={() => switchMode('returned')} />
             </View>
 
             {mode === 'handover' ? (
-              <>
-                <FormBanner
-                  message="A handover must be done online — it is never saved offline. Verify the collector in person before confirming."
-                  tone="success"
-                />
+              <FormSection title="Verified handover" subtitle="Must be done online — never saved offline" icon="hand-left" tint="#1f6feb">
                 <AppTextField
                   label="Authorization id"
+                  required
                   value={authorizationId}
                   onChangeText={setAuthorizationId}
                   placeholder="The resident's authorization id"
@@ -226,8 +203,6 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
                     ? { error: handover.error.fieldErrors.parcelAuthorizationId }
                     : {})}
                 />
-
-                <SectionHeading title="Collector verification" />
                 <AppTextField
                   label="OTP"
                   value={otp}
@@ -255,14 +230,14 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
                     ? { error: handover.error.fieldErrors.presentedIdReference }
                     : {})}
                 />
-                <AppTextField
-                  label="Proof reference (optional)"
+                <PhotoPicker
+                  label="Handover proof (optional)"
+                  files={resources.files}
+                  upload={photoUpload}
                   value={proofFileId}
-                  onChangeText={setProofFileId}
-                  placeholder="Captured handover proof file id"
-                  autoCapitalize="none"
+                  onChange={setProofFileId}
+                  disabled={handover.running}
                 />
-
                 {handover.error ? (
                   <FormBanner
                     message={
@@ -273,7 +248,6 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
                     tone="error"
                   />
                 ) : null}
-
                 <AppButton
                   title="Confirm handover"
                   loading={handover.running}
@@ -281,43 +255,48 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
                   onPress={() => handover.run()}
                   accessibilityHint="Verify the collector and hand over the parcel"
                 />
-              </>
+              </FormSection>
             ) : mode === 'lostDamaged' ? (
-              <>
+              <FormSection title="Lost / damaged" subtitle="Raises a linked incident" icon="warning" tint={theme.color.danger}>
                 <AppTextField
                   label="Circumstances"
+                  required
                   value={circumstances}
                   onChangeText={setCircumstances}
                   placeholder="What happened to the parcel?"
+                  multiline
                   {...(lostDamaged.error?.fieldErrors.circumstances
                     ? { error: lostDamaged.error.fieldErrors.circumstances }
                     : {})}
                 />
-                <AppTextField
-                  label="Evidence reference (optional)"
+                <PhotoPicker
+                  label="Evidence (optional)"
+                  files={resources.files}
+                  upload={photoUpload}
                   value={evidenceFileId}
-                  onChangeText={setEvidenceFileId}
-                  placeholder="Captured loss / damage evidence file id"
-                  autoCapitalize="none"
+                  onChange={setEvidenceFileId}
+                  disabled={lostDamaged.running}
                 />
                 {lostDamaged.error && !lostDamaged.error.fieldErrors.circumstances ? (
                   <FormBanner message={lostDamaged.error.message} tone="error" />
                 ) : null}
                 <AppButton
                   title="Record lost / damaged"
+                  variant="danger"
                   loading={lostDamaged.running}
                   disabled={circumstances.trim().length === 0}
                   onPress={() => lostDamaged.run()}
                   accessibilityHint="Record this parcel as lost or damaged and raise a linked incident"
                 />
-              </>
+              </FormSection>
             ) : (
-              <>
+              <FormSection title="Returned to provider" icon="arrow-undo" tint={theme.color.warning}>
                 <AppTextField
                   label="Reason (optional)"
                   value={returnReason}
                   onChangeText={setReturnReason}
                   placeholder="Why is the parcel being returned?"
+                  multiline
                 />
                 {returned.error ? <FormBanner message={returned.error.message} tone="error" /> : null}
                 <AppButton
@@ -326,19 +305,22 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
                   onPress={() => returned.run()}
                   accessibilityHint="Record this parcel as returned to the delivery provider"
                 />
-              </>
+              </FormSection>
             )}
           </>
         )}
-      </Screen>
+      </FormScreen>
     );
   }
 
-  return (
-    <Screen accessibilityLabel="Parcels for handover">
-      {onBack ? <LinkButton title="‹ Back" onPress={onBack} accessibilityHint="Return to the parcels menu" /> : null}
-      <SectionHeading title="Verified handover" level={1} />
+  const total = items.length;
 
+  return (
+    <FormScreen
+      title="Verified handover"
+      subtitle={total ? `${total} ready to hand over` : 'Release parcels to residents'}
+      {...(onBack ? { onBack } : {})}
+    >
       <AsyncBoundary
         loading={loading}
         error={error}
@@ -348,14 +330,27 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
       >
         <View style={styles.list}>
           {items.map((p) => (
-            <ListRow
+            <Pressable
               key={p.id}
-              title={p.trackingNumber}
-              subtitle={`${p.provider} · ${humanizeCode(p.category)}${p.isPriority ? ' · Priority' : ''}`}
-              trailing={<Badge label={humanizeCode(p.status)} tone={parcelStatusTone(p.status)} />}
+              style={styles.card}
               onPress={() => openParcel(p)}
-              accessibilityHint={`Hand over ${p.trackingNumber}`}
-            />
+              accessibilityRole="button"
+              accessibilityLabel={`Hand over ${p.trackingNumber}`}
+            >
+              <View style={[styles.iconTile, { backgroundColor: '#1f6feb1f' }]}>
+                <Ionicons name="hand-left" size={22} color="#1f6feb" />
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle} numberOfLines={1}>{p.trackingNumber}</Text>
+                <Text style={styles.cardSub} numberOfLines={1}>
+                  {p.provider} · {humanizeCode(p.category)}{p.isPriority ? ' · Priority' : ''}
+                </Text>
+              </View>
+              <View style={styles.cardRight}>
+                <Badge label={humanizeCode(p.status)} tone={parcelStatusTone(p.status)} />
+                <Ionicons name="chevron-forward" size={18} color={theme.color.mutedText} />
+              </View>
+            </Pressable>
           ))}
         </View>
         {data ? (
@@ -368,7 +363,21 @@ export function ParcelHandoverScreen({ resources, onBack }: ParcelHandoverScreen
           />
         ) : null}
       </AsyncBoundary>
-    </Screen>
+    </FormScreen>
+  );
+}
+
+/** A pill tab in the segmented control. */
+function SegTab({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      style={[styles.segTab, active ? styles.segTabActive : null]}
+    >
+      <Text style={[styles.segText, active ? styles.segTextActive : null]} numberOfLines={1}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -389,6 +398,39 @@ function formatDateTime(iso: string): string {
 
 const styles = StyleSheet.create({
   list: { gap: theme.spacing.md, marginBottom: theme.spacing.md },
-  segment: { flexDirection: 'row', gap: theme.spacing.sm },
-  flex: { flex: 1 },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadow.soft,
+  },
+  summaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadow.soft,
+  },
+  iconTile: { width: 48, height: 48, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  cardSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
+  cardRight: { alignItems: 'flex-end', gap: theme.spacing.xs },
+  segment: {
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.pill,
+    padding: 4,
+    ...theme.shadow.soft,
+  },
+  segTab: { flex: 1, alignItems: 'center', paddingVertical: theme.spacing.sm, paddingHorizontal: 4, borderRadius: theme.radius.pill },
+  segTabActive: { backgroundColor: theme.color.primary },
+  segText: { fontSize: theme.fontSize.caption, fontWeight: '700', color: theme.color.mutedText },
+  segTextActive: { color: theme.color.primaryText },
 });

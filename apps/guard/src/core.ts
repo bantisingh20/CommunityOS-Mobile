@@ -8,6 +8,7 @@ import {
   SecureTokenStore,
   createResourceClients,
   expoSecureStorage,
+  isRefreshTokenDead,
   registerDevice,
   resolveConfigFromEnv,
   type AppConfig,
@@ -41,13 +42,27 @@ export function createAppCore(): AppCore {
   const config = resolveConfigFromEnv();
   const storage = expoSecureStorage(SecureStore);
   const tokenStore = new SecureTokenStore(storage);
+  // Assigned just below; the refresher reads it lazily (set by the time a 401 fires).
+  let auth: AuthService;
   const api = new ApiClient({
     config,
     tokenStore,
-    // 9.1 ships login/logout; a token-refresh endpoint arrives with later session work. Until
-    // then a 401 clears the session and the AuthGate routes the user back to login.
+    // Silent re-auth on 401 (single-flight): swap the refresh token for a fresh access token and
+    // retry transparently (no re-login). Only a genuinely dead refresh token clears the session and
+    // routes to login; a transient failure keeps the user signed in (stay-logged-in, like the
+    // resident app).
+    refreshToken: async () => {
+      try {
+        return await auth.refresh();
+      } catch (err) {
+        if (isRefreshTokenDead(err)) {
+          await tokenStore.clear();
+        }
+        return null;
+      }
+    },
   });
-  const auth = new AuthService(api, tokenStore);
+  auth = new AuthService(api, tokenStore);
   const resources = createResourceClients(api);
   const offlineQueue = new GateOfflineQueue(storage, resources.gate);
 

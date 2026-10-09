@@ -3,7 +3,6 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { TopBar } from '../ui/TopBar';
 import { BottomTabBar, type TabKey } from '../ui/BottomTabBar';
-import { FeatureTile } from '../ui/FeatureTile';
 import { QuickActionCard } from '../ui/QuickActionCard';
 import { StatChip } from '../ui/StatChip';
 import { SectionHeading } from '../ui/SectionHeading';
@@ -12,17 +11,18 @@ import { useAsync } from '../ui/hooks';
 import { useNavStack } from '../ui/navStack';
 import { useAuth } from '../auth/AuthContext';
 import { LogoutButton } from '../screens/LogoutButton';
+import { hasAdminRole, hasSecurityRole, hasResidentRole } from './shared/roles';
 import type { ResourceClients, GateOfflineQueue } from '../resources';
 import type { Community, Unit } from '../models/community';
 import { CommunityListScreen } from './admin/CommunityListScreen';
 import { CommunityManageScreen } from './admin/CommunityManageScreen';
-import { CommunityFormScreen } from './admin/CommunityFormScreen';
 import { WingsScreen } from './admin/WingsScreen';
 import { UnitListScreen } from './admin/UnitListScreen';
-import { UnitFormScreen } from './admin/UnitFormScreen';
 import { UnitDetailScreen } from './admin/UnitDetailScreen';
 import { ResidentListScreen } from './admin/ResidentListScreen';
 import { AddResidentScreen } from './admin/AddResidentScreen';
+import { SecurityStaffListScreen } from './admin/SecurityStaffListScreen';
+import { AnnouncementAdminScreen } from './admin/AnnouncementAdminScreen';
 import { MyHouseholdScreen } from './resident/MyHouseholdScreen';
 import { MyProfileScreen } from './resident/MyProfileScreen';
 import { CommunicationPreferencesScreen } from './resident/CommunicationPreferencesScreen';
@@ -48,16 +48,20 @@ import { AssetLookupScreen } from './guard/AssetLookupScreen';
 
 export interface HomeNavigatorProps {
   resources: ResourceClients;
-  /** Which app this is — picks the feature set (resident self-service vs guard operations). */
+  /**
+   * Legacy app kind — retained only for the guard offline-queue wiring. Feature VISIBILITY is driven
+   * by the signed-in ROLES (see below), not by this, so one merged app serves resident + guard +
+   * admin based on who logs in.
+   */
   app: 'resident' | 'guard';
   /**
    * Whether to surface the admin management section. Computed from the signed-in roles; the server
    * still enforces real authz, so this flag only decides what to *offer*, never what is *allowed*.
    */
   isAdmin?: boolean;
-  /** Shown as the home heading / app name fallback, e.g. "Resident" / "Guard". */
+  /** Shown as the home heading / app name fallback. */
   appTitle: string;
-  /** Optional offline write queue (guard app) for the gate entry/exit screen (Task 17.1). */
+  /** Optional offline write queue (guard) for the gate entry/exit screen (Task 17.1). */
   offlineQueue?: GateOfflineQueue;
 }
 
@@ -69,8 +73,17 @@ export interface HomeNavigatorProps {
  * correct thing. Everything is styled from the shared {@link theme}, so a global colour change flows
  * through the whole shell.
  */
-export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offlineQueue }: HomeNavigatorProps) {
+export function HomeNavigator({ resources, isAdmin = false, appTitle, offlineQueue }: HomeNavigatorProps) {
   const { displayName, roles } = useAuth();
+  // Feature visibility is driven by the signed-in ROLES (merged app): a login sees resident, guard
+  // and/or admin features based on who they are. `isAdmin` is passed in (computed the same way) and
+  // kept authoritative for the admin section. A user with none of admin/security is treated as a
+  // resident so they still get a usable home. The server enforces real authz on every call.
+  const isSecurity = useMemo(() => hasSecurityRole(roles), [roles]);
+  const isAdminFromRoles = useMemo(() => hasAdminRole(roles), [roles]);
+  const isAdminRole = isAdmin || isAdminFromRoles;
+  const isResidentFromRoles = useMemo(() => hasResidentRole(roles), [roles]);
+  const isResident = isResidentFromRoles || (!isSecurity && !isAdminRole);
   // A real route stack (not a single route): pushing a feature screen keeps the shell beneath it,
   // the Android hardware-back pops one screen, and only the top route renders (per-route rendering).
   const nav = useNavStack<Route>({ name: 'tabs', tab: 'home' });
@@ -95,18 +108,18 @@ export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offli
   const societyName =
     societyQuery.data?.items?.[0]?.name ?? `CommunityOS · ${appTitle}`;
 
-  // Prefer the signed-in person's real NAME in the header, not the phone/email they logged in with.
-  // In the resident app the self-scoped list returns only the user's own resident row, so its name
-  // is the user's name. Admin/guard principals have no resident row → fall back to the identifier.
+  // Show the SIGNED-IN person's own real name in the header — resolved from THEIR OWN resident row
+  // via `GET /residents/me` (the row whose UserId == the token's user id, the Resident→User link),
+  // not phone/email and never a stranger. ONE self-targeted call — no list-and-filter. Works for
+  // resident, guard and admin uniformly; a superadmin has no resident row (me.resident == null) →
+  // fall back to the login identifier.
+  const isResidentPrincipal = isResident && !isAdminRole && !isSecurity;
   const meQuery = useAsync(
-    (signal) =>
-      app === 'resident'
-        ? resources.residents.list({ pageSize: 1 }, {}, { signal })
-        : Promise.resolve(null),
-    [resources, app],
+    (signal) => resources.residents.me({ signal }).catch(() => null),
+    [resources],
   );
-  const residentName = meQuery.data?.items?.[0]?.name;
-  const userName = residentName ?? displayName ?? 'Signed in';
+  const myName = meQuery.data?.resident?.name;
+  const userName = myName ?? displayName ?? 'Signed in';
 
   // Only the top route renders. Feature detail screens render full-screen (their own back → pop).
   switch (route.name) {
@@ -115,42 +128,22 @@ export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offli
         <CommunityListScreen
           resources={resources}
           onBack={back}
+          canCreate
           onOpenCommunity={(community) => go({ name: 'communityManage', community })}
-          onCreate={(organizationId) => go({ name: 'communityForm', ...(organizationId ? { organizationId } : {}) })}
         />
       );
     case 'communityManage':
       return (
         <CommunityManageScreen
+          resources={resources}
           community={route.community}
           onBack={back}
-          onEdit={() => go({ name: 'communityForm', community: route.community })}
           onWings={() => go({ name: 'wings', community: route.community })}
-          onAddUnit={() => go({ name: 'unitForm', community: route.community })}
           onViewUnits={() => go({ name: 'units', community: route.community })}
-        />
-      );
-    case 'communityForm':
-      return (
-        <CommunityFormScreen
-          resources={resources}
-          {...(route.community ? { community: route.community } : {})}
-          {...(route.organizationId ? { organizationId: route.organizationId } : {})}
-          onBack={back}
-          onSaved={() => back()}
         />
       );
     case 'wings':
       return <WingsScreen resources={resources} community={route.community} onBack={back} />;
-    case 'unitForm':
-      return (
-        <UnitFormScreen
-          resources={resources}
-          community={route.community}
-          onBack={back}
-          onSaved={() => back()}
-        />
-      );
     case 'units':
       return (
         <UnitListScreen
@@ -158,7 +151,6 @@ export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offli
           {...(route.community ? { community: route.community } : {})}
           onBack={back}
           onOpenUnit={(unit) => go({ name: 'unit', unit, origin: { name: 'units', community: route.community } })}
-          {...(route.community ? { onAddUnit: () => go({ name: 'unitForm', community: route.community! }) } : {})}
         />
       );
     case 'allUnits':
@@ -184,6 +176,11 @@ export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offli
       return <ResidentListScreen resources={resources} queueOnly onBack={back} />;
     case 'addResident':
       return <AddResidentScreen resources={resources} onBack={back} onSaved={() => back()} />;
+
+    case 'securityStaff':
+      return <SecurityStaffListScreen resources={resources} onBack={back} />;
+    case 'announcementsAdmin':
+      return <AnnouncementAdminScreen resources={resources} onBack={back} />;
     case 'myHousehold':
       return <MyHouseholdScreen resources={resources} onBack={back} />;
     case 'myProfile':
@@ -258,16 +255,16 @@ export function HomeNavigator({ resources, app, isAdmin = false, appTitle, offli
           <TopBar title={societyName} subtitle={userName} notificationCount={0} />
           <View style={styles.body}>
             {tab === 'home' ? (
-              <DashboardTab app={app} appTitle={appTitle} userName={userName} onNavigate={go} onOpenServices={() => setTab('services')} />
+              <DashboardTab isResident={isResident} isSecurity={isSecurity} userName={userName} onNavigate={go} onOpenServices={() => setTab('services')} />
             ) : tab === 'services' ? (
-              <ServicesTab app={app} isAdmin={isAdmin} onNavigate={go} />
+              <ServicesTab isResident={isResident} isSecurity={isSecurity} isAdmin={isAdminRole} onNavigate={go} />
             ) : (
               <ProfileTab
                 userName={userName}
                 appTitle={appTitle}
                 societyName={societyName}
                 roles={roles}
-                {...(app === 'resident' ? { onManageProfile: () => go({ name: 'myProfile' }) } : {})}
+                {...(isResidentPrincipal ? { onManageProfile: () => go({ name: 'myProfile' }) } : {})}
               />
             )}
           </View>
@@ -286,15 +283,15 @@ type Route =
   | { name: 'tabs'; tab: TabKey }
   | { name: 'communities' }
   | { name: 'communityManage'; community: Community }
-  | { name: 'communityForm'; community?: Community; organizationId?: string }
   | { name: 'wings'; community: Community }
-  | { name: 'unitForm'; community: Community }
   | { name: 'units'; community?: Community }
   | { name: 'allUnits' }
   | { name: 'unit'; unit: Unit; origin: UnitOrigin }
   | { name: 'residents' }
   | { name: 'queue' }
   | { name: 'addResident' }
+  | { name: 'securityStaff' }
+  | { name: 'announcementsAdmin' }
   | { name: 'myHousehold' }
   | { name: 'myProfile' }
   | { name: 'commPrefs' }
@@ -318,10 +315,12 @@ type Route =
   | { name: 'workOrders'; assetId?: string; title?: string }
   | { name: 'assetLookup' };
 
-/** A feature entry in the Services grid. */
+/** A feature entry in the Services list. */
 interface Feature {
   readonly route: Route;
   readonly label: string;
+  /** One-line description shown under the label in the Services list. */
+  readonly subtitle?: string;
   readonly icon: keyof typeof Ionicons.glyphMap;
   readonly tint?: string;
 }
@@ -338,37 +337,37 @@ function residentGroups(): FeatureGroup[] {
     {
       title: 'My home',
       features: [
-        { route: { name: 'myProfile' }, label: 'My Profile', icon: 'person-circle', tint: theme.color.primary },
-        { route: { name: 'myHousehold' }, label: 'My Household', icon: 'home', tint: theme.color.info },
-        { route: { name: 'commPrefs' }, label: 'Preferences', icon: 'options', tint: '#8250df' },
+        { route: { name: 'myProfile' }, label: 'My Profile', subtitle: 'Your details and contact info', icon: 'person-circle', tint: theme.color.primary },
+        { route: { name: 'myHousehold' }, label: 'My Household', subtitle: 'Unit, members, vehicles and pets', icon: 'home', tint: theme.color.info },
+        { route: { name: 'commPrefs' }, label: 'Preferences', subtitle: 'Notification and contact settings', icon: 'options', tint: '#8250df' },
       ],
     },
     {
       title: 'Visitors',
       features: [
-        { route: { name: 'inviteVisitor' }, label: 'Invite Visitor', icon: 'person-add', tint: '#1a7f37' },
-        { route: { name: 'myVisitors' }, label: 'My Visitors', icon: 'people', tint: '#0969da' },
-        { route: { name: 'walkInApprovals' }, label: 'Approvals', icon: 'checkmark-done', tint: '#bf8700' },
-        { route: { name: 'recurringVisitors' }, label: 'Recurring', icon: 'repeat', tint: '#0969da' },
+        { route: { name: 'inviteVisitor' }, label: 'Invite Visitor', subtitle: 'Create a pre-approved gate pass', icon: 'person-add', tint: '#1a7f37' },
+        { route: { name: 'myVisitors' }, label: 'My Visitors', subtitle: 'See and manage your visitors', icon: 'people', tint: '#0969da' },
+        { route: { name: 'walkInApprovals' }, label: 'Approvals', subtitle: 'Approve or reject walk-in visitors', icon: 'checkmark-done', tint: '#bf8700' },
+        { route: { name: 'recurringVisitors' }, label: 'Recurring', subtitle: 'Regular visitors like staff or help', icon: 'repeat', tint: '#0969da' },
       ],
     },
     {
       title: 'Parcels',
       features: [
-        { route: { name: 'myParcels' }, label: 'My Parcels', icon: 'cube', tint: '#cf5500' },
+        { route: { name: 'myParcels' }, label: 'My Parcels', subtitle: 'Track deliveries held at the gate', icon: 'cube', tint: '#cf5500' },
       ],
     },
     {
       title: 'Helpdesk',
       features: [
-        { route: { name: 'raiseTicket' }, label: 'Raise Ticket', icon: 'create', tint: '#cf222e' },
-        { route: { name: 'myTickets' }, label: 'My Tickets', icon: 'list', tint: '#1f6feb' },
+        { route: { name: 'raiseTicket' }, label: 'Raise Ticket', subtitle: 'Report an issue or request', icon: 'create', tint: '#cf222e' },
+        { route: { name: 'myTickets' }, label: 'My Tickets', subtitle: 'Track your open and past tickets', icon: 'list', tint: '#1f6feb' },
       ],
     },
     {
       title: 'Community',
       features: [
-        { route: { name: 'announcements' }, label: 'Announcements', icon: 'megaphone', tint: '#8250df' },
+        { route: { name: 'announcements' }, label: 'Announcements', subtitle: 'Notices from your community', icon: 'megaphone', tint: '#8250df' },
       ],
     },
   ];
@@ -380,35 +379,33 @@ function guardGroups(): FeatureGroup[] {
     {
       title: 'Gate',
       features: [
-        { route: { name: 'verifyPass' }, label: 'Verify Pass', icon: 'qr-code', tint: '#1a7f37' },
-        { route: { name: 'walkInCapture' }, label: 'Walk-in', icon: 'person-add', tint: '#bf8700' },
-        { route: { name: 'entryExit' }, label: 'Entry / Exit', icon: 'swap-horizontal', tint: '#0969da' },
-        { route: { name: 'watchlist' }, label: 'Watchlist', icon: 'alert-circle', tint: '#cf222e' },
+        { route: { name: 'verifyPass' }, label: 'Verify Pass', subtitle: 'Scan or enter a visitor pass code', icon: 'qr-code', tint: '#1a7f37' },
+        { route: { name: 'walkInCapture' }, label: 'Walk-in', subtitle: 'Register an unexpected visitor', icon: 'person-add', tint: '#bf8700' },
+        { route: { name: 'entryExit' }, label: 'Entry / Exit', subtitle: 'Record who comes and goes', icon: 'swap-horizontal', tint: '#0969da' },
+        { route: { name: 'watchlist' }, label: 'Watchlist', subtitle: 'Flagged people and vehicles', icon: 'alert-circle', tint: '#cf222e' },
       ],
     },
     {
       title: 'Parcels',
       features: [
-        { route: { name: 'registerParcel' }, label: 'Register', icon: 'cube', tint: '#cf5500' },
-        { route: { name: 'parcelCustody' }, label: 'Custody', icon: 'file-tray-stacked', tint: '#8250df' },
-        { route: { name: 'parcelHandover' }, label: 'Handover', icon: 'hand-left', tint: '#1f6feb' },
-      ],
-    },
-    {
-      title: 'Maintenance',
-      features: [
-        { route: { name: 'workOrders' }, label: 'Work Orders', icon: 'construct', tint: '#bf8700' },
-        { route: { name: 'assetLookup' }, label: 'Find Asset', icon: 'search', tint: '#0969da' },
+        { route: { name: 'registerParcel' }, label: 'Register', subtitle: 'Log a parcel received at the gate', icon: 'cube', tint: '#cf5500' },
+        { route: { name: 'parcelCustody' }, label: 'Custody', subtitle: 'Parcels currently held', icon: 'file-tray-stacked', tint: '#8250df' },
+        { route: { name: 'parcelHandover' }, label: 'Handover', subtitle: 'Release a parcel to a resident', icon: 'hand-left', tint: '#1f6feb' },
       ],
     },
     {
       title: 'Security',
       features: [
-        { route: { name: 'sos' }, label: 'SOS', icon: 'warning', tint: '#cf222e' },
-        { route: { name: 'lookup' }, label: 'Lookup', icon: 'people', tint: '#1f6feb' },
+        { route: { name: 'sos' }, label: 'SOS', subtitle: 'Raise an emergency alert', icon: 'warning', tint: '#cf222e' },
+        { route: { name: 'lookup' }, label: 'Lookup', subtitle: 'Find a resident or unit', icon: 'people', tint: '#1f6feb' },
       ],
     },
   ];
+  // Maintenance (Work Orders / Find Asset) is deliberately NOT offered to guards: managing work
+  // orders + assets is a facility/maintenance-staff + admin function, and the Security role holds no
+  // WorkOrder/Asset permission — so the server would 403 ("you don't have permission"). Rather than
+  // grant guards rights they shouldn't have, we don't surface the tiles. (The screens + routes still
+  // exist for an admin/maintenance surface.)
 }
 
 /** Admin management features (added when the signed-in roles look like an admin role). */
@@ -416,10 +413,12 @@ function adminGroup(): FeatureGroup {
   return {
     title: 'Management',
     features: [
-      { route: { name: 'communities' }, label: 'Communities', icon: 'business', tint: '#8250df' },
-      { route: { name: 'allUnits' }, label: 'Units', icon: 'grid', tint: '#0969da' },
-      { route: { name: 'residents' }, label: 'Residents', icon: 'people', tint: '#1a7f37' },
-      { route: { name: 'queue' }, label: 'Verification', icon: 'shield-checkmark', tint: '#bf8700' },
+      { route: { name: 'communities' }, label: 'Communities', subtitle: 'Manage societies and their setup', icon: 'business', tint: '#8250df' },
+      { route: { name: 'allUnits' }, label: 'Units', subtitle: 'Browse, add or edit units', icon: 'grid', tint: '#0969da' },
+      { route: { name: 'residents' }, label: 'Residents', subtitle: 'Add, edit and manage residents', icon: 'people', tint: '#1a7f37' },
+      { route: { name: 'securityStaff' }, label: 'Security Staff', subtitle: 'Guard logins and access', icon: 'shield-half', tint: '#cf222e' },
+      { route: { name: 'announcementsAdmin' }, label: 'Announcements', subtitle: 'Publish and manage notices', icon: 'megaphone', tint: '#8250df' },
+      { route: { name: 'queue' }, label: 'Verification', subtitle: 'Approve pending residents', icon: 'shield-checkmark', tint: '#bf8700' },
     ],
   };
 }
@@ -452,48 +451,48 @@ function todayLabel(): string {
 
 /** Home tab: a modern dashboard — a dark hero with stat chips, then rich quick-action cards. */
 function DashboardTab({
-  app,
-  appTitle,
+  isResident,
+  isSecurity,
   userName,
   onNavigate,
   onOpenServices,
 }: {
-  app: 'resident' | 'guard';
-  appTitle: string;
+  isResident: boolean;
+  isSecurity: boolean;
   userName: string;
   onNavigate: (r: Route) => void;
   onOpenServices: () => void;
 }) {
-  const quick: QuickAction[] = useMemo(
-    () =>
-      app === 'resident'
-        ? [
-            { route: { name: 'inviteVisitor' }, title: 'Invite a Visitor', subtitle: 'Share a QR pass with your guest', icon: 'person-add', tint: theme.color.success },
-            { route: { name: 'raiseTicket' }, title: 'Raise a Ticket', subtitle: 'Report an issue for your unit', icon: 'create', tint: theme.color.danger },
-            { route: { name: 'myParcels' }, title: 'My Parcels', subtitle: 'Track deliveries & handovers', icon: 'cube', tint: theme.color.warning },
-            { route: { name: 'announcements' }, title: 'Announcements', subtitle: 'Community notices & updates', icon: 'megaphone', tint: '#8250df' },
-          ]
-        : [
-            { route: { name: 'verifyPass' }, title: 'Verify a Pass', subtitle: 'Scan QR or enter OTP at the gate', icon: 'qr-code', tint: theme.color.success },
-            { route: { name: 'registerParcel' }, title: 'Register a Parcel', subtitle: 'Log a delivery & notify resident', icon: 'cube', tint: theme.color.warning },
-            { route: { name: 'walkInCapture' }, title: 'Register Walk-in', subtitle: 'Capture a visitor & request approval', icon: 'person-add', tint: theme.color.info },
-            { route: { name: 'sos' }, title: 'SOS', subtitle: 'Raise or manage an emergency alert', icon: 'warning', tint: theme.color.danger },
-          ],
-    [app],
-  );
+  // Quick actions by role (a user can be both a resident and a guard). Guard actions come first for
+  // a guard-only login; a resident sees resident actions. Capped so the dashboard stays scannable.
+  const quick: QuickAction[] = useMemo(() => {
+    const residentQuick: QuickAction[] = [
+      { route: { name: 'inviteVisitor' }, title: 'Invite a Visitor', subtitle: 'Share a QR pass with your guest', icon: 'person-add', tint: theme.color.success },
+      { route: { name: 'raiseTicket' }, title: 'Raise a Ticket', subtitle: 'Report an issue for your unit', icon: 'create', tint: theme.color.danger },
+      { route: { name: 'myParcels' }, title: 'My Parcels', subtitle: 'Track deliveries & handovers', icon: 'cube', tint: theme.color.warning },
+      { route: { name: 'announcements' }, title: 'Announcements', subtitle: 'Community notices & updates', icon: 'megaphone', tint: '#8250df' },
+    ];
+    const guardQuick: QuickAction[] = [
+      { route: { name: 'verifyPass' }, title: 'Verify a Pass', subtitle: 'Scan QR or enter OTP at the gate', icon: 'qr-code', tint: theme.color.success },
+      { route: { name: 'walkInCapture' }, title: 'Register Walk-in', subtitle: 'Capture a visitor & request approval', icon: 'person-add', tint: theme.color.info },
+      { route: { name: 'registerParcel' }, title: 'Register a Parcel', subtitle: 'Log a delivery & notify resident', icon: 'cube', tint: theme.color.warning },
+      { route: { name: 'sos' }, title: 'SOS', subtitle: 'Raise or manage an emergency alert', icon: 'warning', tint: theme.color.danger },
+    ];
+    const list = [...(isSecurity ? guardQuick : []), ...(isResident ? residentQuick : [])];
+    return list.slice(0, 4);
+  }, [isResident, isSecurity]);
 
-  const stats =
-    app === 'resident'
-      ? [
-          { icon: 'cube' as const, value: '—', label: 'Parcels' },
-          { icon: 'people' as const, value: '—', label: 'Visitors' },
-          { icon: 'construct' as const, value: '—', label: 'Tickets' },
-        ]
-      : [
-          { icon: 'walk' as const, value: '—', label: 'On-site' },
-          { icon: 'cube' as const, value: '—', label: 'Parcels' },
-          { icon: 'alert-circle' as const, value: '—', label: 'Alerts' },
-        ];
+  const stats = isSecurity && !isResident
+    ? [
+        { icon: 'walk' as const, value: '—', label: 'On-site' },
+        { icon: 'cube' as const, value: '—', label: 'Parcels' },
+        { icon: 'alert-circle' as const, value: '—', label: 'Alerts' },
+      ]
+    : [
+        { icon: 'cube' as const, value: '—', label: 'Parcels' },
+        { icon: 'people' as const, value: '—', label: 'Visitors' },
+        { icon: 'construct' as const, value: '—', label: 'Tickets' },
+      ];
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
@@ -551,18 +550,25 @@ function DashboardTab({
 
 /** Services tab: every feature as a styled grid, grouped by area. */
 function ServicesTab({
-  app,
+  isResident,
+  isSecurity,
   isAdmin,
   onNavigate,
 }: {
-  app: 'resident' | 'guard';
+  isResident: boolean;
+  isSecurity: boolean;
   isAdmin: boolean;
   onNavigate: (r: Route) => void;
 }) {
+  // Compose the menu from the user's roles (a person can be several): resident self-service, guard
+  // gate operations, and/or the admin management section.
   const groups = useMemo(() => {
-    const base = app === 'resident' ? residentGroups() : guardGroups();
-    return isAdmin ? [...base, adminGroup()] : base;
-  }, [app, isAdmin]);
+    const g: FeatureGroup[] = [];
+    if (isResident) g.push(...residentGroups());
+    if (isSecurity) g.push(...guardGroups());
+    if (isAdmin) g.push(adminGroup());
+    return g;
+  }, [isResident, isSecurity, isAdmin]);
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
@@ -572,25 +578,44 @@ function ServicesTab({
       </View>
       {groups.map((group) => (
         <View key={group.title} style={styles.serviceGroup}>
-          <View style={styles.groupHeaderRow}>
-            <View style={styles.groupAccent} />
-            <Text style={styles.groupTitle}>{group.title}</Text>
-          </View>
-          <View style={styles.grid}>
-            {group.features.map((f) => (
-              <FeatureTile
+          <Text style={styles.groupLabel}>{group.title.toUpperCase()}</Text>
+          {/* Grouped "inset" card: full-width rows with hairline dividers between them. */}
+          <View style={styles.insetCard}>
+            {group.features.map((f, i) => (
+              <ServiceRow
                 key={f.label}
-                label={f.label}
-                icon={f.icon}
-                tint={f.tint}
+                feature={f}
+                first={i === 0}
                 onPress={() => onNavigate(f.route)}
-                accessibilityHint={`Open ${f.label}`}
               />
             ))}
           </View>
         </View>
       ))}
     </ScrollView>
+  );
+}
+
+/** One full-width Services row: colored icon tile + label + subtitle + chevron (iOS-settings style). */
+function ServiceRow({ feature, first, onPress }: { feature: Feature; first: boolean; onPress: () => void }) {
+  const tint = feature.tint ?? theme.color.primary;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={feature.label}
+      accessibilityHint={feature.subtitle ? `${feature.subtitle}. Opens ${feature.label}` : `Open ${feature.label}`}
+      style={({ pressed }) => [styles.serviceRow, !first ? styles.serviceRowDivider : null, pressed ? styles.serviceRowPressed : null]}
+    >
+      <View style={[styles.serviceIcon, { backgroundColor: `${tint}1f` }]}>
+        <Ionicons name={feature.icon} size={20} color={tint} />
+      </View>
+      <View style={styles.serviceText}>
+        <Text style={styles.serviceLabel} numberOfLines={1}>{feature.label}</Text>
+        {feature.subtitle ? <Text style={styles.serviceSubtitle} numberOfLines={1}>{feature.subtitle}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.color.mutedText} />
+    </Pressable>
   );
 }
 
@@ -768,15 +793,22 @@ const styles = StyleSheet.create({
   exploreText: { flex: 1 },
   exploreTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
   exploreSub: { fontSize: theme.fontSize.caption, color: theme.color.mutedText, marginTop: 2 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.md },
   group: { gap: theme.spacing.sm, marginBottom: theme.spacing.sm },
   servicesHeader: { marginBottom: theme.spacing.sm },
   servicesTitle: { fontSize: theme.fontSize.heading, fontWeight: '800', color: theme.color.text },
   servicesSub: { fontSize: theme.fontSize.label, color: theme.color.mutedText, marginTop: 2 },
   serviceGroup: { gap: theme.spacing.sm, marginBottom: theme.spacing.lg },
-  groupHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
-  groupAccent: { width: 4, height: 18, borderRadius: 2, backgroundColor: theme.color.primary },
-  groupTitle: { fontSize: theme.fontSize.body, fontWeight: '800', color: theme.color.text },
+  // Small uppercase section label above each inset card (iOS-settings style).
+  groupLabel: { fontSize: theme.fontSize.caption, fontWeight: '800', color: theme.color.mutedText, letterSpacing: 0.6, marginLeft: theme.spacing.sm },
+  // Grouped "inset" card holding the full-width rows.
+  insetCard: { backgroundColor: theme.color.surface, borderRadius: theme.radius.lg, overflow: 'hidden', ...theme.shadow.soft },
+  serviceRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, minHeight: 64 },
+  serviceRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.color.border },
+  serviceRowPressed: { backgroundColor: theme.color.background },
+  serviceIcon: { width: 40, height: 40, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  serviceText: { flex: 1, gap: 2 },
+  serviceLabel: { fontSize: theme.fontSize.body, fontWeight: '700', color: theme.color.text },
+  serviceSubtitle: { fontSize: theme.fontSize.caption, color: theme.color.mutedText },
   // --- Profile page ---
   profileHero: {
     backgroundColor: theme.color.hero,
