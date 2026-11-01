@@ -4,6 +4,7 @@ import { WelcomeScreen } from '@/features/auth/screens/WelcomeScreen';
 import { LoginScreen } from '@/features/auth/screens/LoginScreen';
 import { ForgotPasswordScreen } from '@/features/auth/screens/ForgotPasswordScreen';
 import { RegisterScreen } from '@/features/profile/screens/RegisterScreen';
+import { RegisterSocietyScreen } from '@/features/auth/screens/RegisterSocietyScreen';
 import { FormBanner } from '@/components/ui/FormBanner';
 import type { AuthService } from '../auth/authService';
 import type { SecureStorage } from '@/services/storage/tokenStore';
@@ -20,7 +21,7 @@ export interface AuthNavigatorProps {
   welcomeHero?: ImageSourcePropType;
 }
 
-type AuthRoute = 'welcome' | 'login' | 'forgot' | 'register';
+type AuthRoute = 'welcome' | 'login' | 'forgot' | 'register' | 'registerSociety';
 
 export function AuthNavigator({ appTitle, auth, resources, storage, welcomeLogo, welcomeHero }: AuthNavigatorProps) {
   const [route, setRoute] = useState<AuthRoute>(storage ? 'welcome' : 'login');
@@ -86,6 +87,17 @@ export function AuthNavigator({ appTitle, auth, resources, storage, welcomeLogo,
       ) : (
         <LoginScreen appTitle={appTitle} onForgotPassword={() => setRoute('forgot')} {...(welcomeLogo ? { logo: welcomeLogo } : {})} />
       );
+    case 'registerSociety':
+      return resources ? (
+        <RegisterSocietyScreen
+          resources={resources}
+          onBack={() => goLogin()}
+          onDone={(notice) => goLogin(notice)}
+          {...(welcomeLogo ? { logo: welcomeLogo } : {})}
+        />
+      ) : (
+        <LoginScreen appTitle={appTitle} onForgotPassword={() => setRoute('forgot')} {...(welcomeLogo ? { logo: welcomeLogo } : {})} />
+      );
     case 'forgot':
       return (
         <ForgotPasswordScreen
@@ -107,6 +119,7 @@ export function AuthNavigator({ appTitle, auth, resources, storage, welcomeLogo,
           {...(welcomeLogo ? { logo: welcomeLogo } : {})}
           {...(storage ? { storage } : {})}
           {...(registerEnabled && resources ? { onRegister: () => { setLoginNotice(''); setRoute('register'); } } : {})}
+          {...(resources ? { onRegisterSociety: () => { setLoginNotice(''); setRoute('registerSociety'); } } : {})}
           {...(loginNotice
             ? { headerSlot: <FormBanner message={loginNotice} tone="success" testID="login-notice" /> }
             : {})}

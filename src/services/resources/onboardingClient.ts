@@ -52,6 +52,22 @@ export interface SelfRegisterResult {
   readonly login: LoginResponse;
 }
 
+export interface RegisterSocietyBody {
+  readonly organizationName: string;
+  readonly communityName: string;
+  readonly communityType: string;
+  readonly adminName: string;
+  readonly adminEmail?: string;
+  readonly adminPhone?: string;
+  readonly adminPassword: string;
+}
+
+export interface RegisterSocietyResult {
+  readonly communityId: string;
+  readonly communityName: string;
+  readonly message: string;
+}
+
 export class OnboardingClient {
   constructor(private readonly api: ApiClient) {}
 
@@ -104,6 +120,13 @@ export class OnboardingClient {
 
   selfRegister(body: SelfRegisterBody): Promise<SelfRegisterResult> {
     return this.api.post<SelfRegisterResult>('/api/v1/residents/self-register', {
+      body,
+      anonymous: true,
+    });
+  }
+
+  registerSociety(body: RegisterSocietyBody): Promise<RegisterSocietyResult> {
+    return this.api.post<RegisterSocietyResult>('/api/v1/onboarding/community', {
       body,
       anonymous: true,
     });

@@ -30,6 +30,7 @@ export interface LoginScreenProps {
   appTitle: string;
   onForgotPassword: () => void;
   onRegister?: () => void;
+  onRegisterSociety?: () => void;
   logo?: ImageSourcePropType;
   storage?: SecureStorage;
   headerSlot?: React.ReactNode;
@@ -50,7 +51,7 @@ const FEATURES: { icon: keyof typeof Ionicons.glyphMap; key: string; tint: strin
 ];
 
 
-export function LoginScreen({ appTitle, onForgotPassword, onRegister, logo, storage, headerSlot }: LoginScreenProps) {
+export function LoginScreen({ appTitle, onForgotPassword, onRegister, onRegisterSociety, logo, storage, headerSlot }: LoginScreenProps) {
   const { login } = useAuth();
   const { t } = useTranslation();
   const [identifier, setIdentifier] = useState(DEV_DEFAULT_IDENTIFIER);
@@ -216,6 +217,19 @@ export function LoginScreen({ appTitle, onForgotPassword, onRegister, logo, stor
                     disabled={submitting}
                     accessibilityHint="Opens the registration screen"
                     testID="login-register"
+                  />
+                </View>
+              ) : null}
+
+              {onRegisterSociety ? (
+                <View style={styles.registerRow}>
+                  <Text style={styles.registerText}>Society not registered?</Text>
+                  <LinkButton
+                    title="Register your society"
+                    onPress={onRegisterSociety}
+                    disabled={submitting}
+                    accessibilityHint="Opens the society registration screen"
+                    testID="login-register-society"
                   />
                 </View>
               ) : null}
