@@ -53,6 +53,7 @@ import { RegisterParcelScreen } from '@/features/parcels/screens/RegisterParcelS
 import { ParcelCustodyScreen } from '@/features/parcels/screens/ParcelCustodyScreen';
 import { ParcelHandoverScreen } from '@/features/parcels/screens/ParcelHandoverScreen';
 import { WorkOrderListScreen } from '@/features/maintenance/screens/WorkOrderListScreen';
+import { MaintenanceBillsScreen } from '@/features/maintenance/screens/MaintenanceBillsScreen';
 import { AssetLookupScreen } from '@/features/visitors/screens/AssetLookupScreen';
 
 export interface HomeNavigatorProps {
@@ -287,6 +288,8 @@ export function HomeNavigator({ resources, isAdmin = false, appTitle, logo, offl
       return <RaiseTicketScreen resources={resources} onBack={back} />;
     case 'myTickets':
       return <TicketListScreen resources={resources} onBack={back} />;
+    case 'maintenanceBills':
+      return <MaintenanceBillsScreen resources={resources} onBack={back} />;
     case 'announcements':
       return <AnnouncementsScreen resources={resources} onBack={back} />;
     case 'verifyPass':
@@ -517,6 +520,7 @@ export type Route =
   | { name: 'parcelHandover' }
   | { name: 'workOrders'; assetId?: string; title?: string }
   | { name: 'assetLookup' }
+  | { name: 'maintenanceBills' }
   | { name: 'myTasks'; type?: string };
 
 /** A feature entry in the Services list. */
@@ -559,6 +563,12 @@ function residentGroups(): FeatureGroup[] {
       title: 'Parcels',
       features: [
         { route: { name: 'myParcels' }, label: 'My Parcels', subtitle: 'Track deliveries held at the gate', icon: 'cube', tint: '#cf5500' },
+      ],
+    },
+    {
+      title: 'Payments',
+      features: [
+        { route: { name: 'maintenanceBills' }, label: 'Maintenance', subtitle: 'View and pay your maintenance bills', icon: 'card', tint: '#1a7f37' },
       ],
     },
     {

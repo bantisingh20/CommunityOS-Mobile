@@ -42,6 +42,8 @@ export interface MaintenanceBill {
   readonly status: string;
   readonly dueDateUtc: string | null;
   readonly issuedAtUtc: string;
+  readonly pendingApproval: boolean;
+  readonly unitNumber: string | null;
 }
 
 export interface MaintenancePayment {
